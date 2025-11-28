@@ -1,28 +1,55 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs/promises';
 import archiver from 'archiver';
 import { PDFDocument, rgb } from 'pdf-lib';
-import { fileURLToPath } from 'url';
-import { dirname, extname } from 'path';
-import { createReadStream, createWriteStream } from 'fs';
-import axios from 'axios';
+import { v2 as cloudinary } from 'cloudinary';
+import https from 'https';
+import http from 'http';
+import dotenv from 'dotenv';
+dotenv.config();
 
+
+// ====== CONFIGURE CLOUDINARY ======
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
+});
+
+
+// Helper: Fetch image from URL as Buffer
+function getBufferFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const req = client.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`Failed to fetch image: ${res.statusCode}`));
+        return;
+      }
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('error', reject);
+    req.setTimeout(10000, () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+  });
+}
 
 const app = express();
 const port = 5000;
 
-app.use(express.json({ limit: '500mb' }));
+app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const upload = multer({
-  storage: multer.memoryStorage() // store uploaded files in RAM
+  storage: multer.memoryStorage() // only for handling uploads before sending to Cloudinary
 });
 
-
-
-// Serve HTML with enhanced UI (Bootstrap 5 + Bold Toggle)
+// Serve HTML UI
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -31,7 +58,6 @@ app.get('/', (req, res) => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>🎯 Precise Certificate Generator</title>
-  <!-- Bootstrap 5 CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     #template {
@@ -126,16 +152,13 @@ app.get('/', (req, res) => {
     <div class="card-body">
       <div id="template"></div>
 
-      <!-- Field Controls -->
       <div id="fieldControls" class="mt-3 p-3 bg-light border rounded" style="display:none;">
         <h6>🎨 Field Styling</h6>
         <div class="row g-2 align-items-center">
-          <!-- Color -->
           <div class="col-md-4">
             <label class="form-label mb-0">Color</label>
             <input type="color" id="colorPicker" value="#000000" class="form-control form-control-color p-1">
           </div>
-          <!-- Size -->
           <div class="col-md-5">
             <label class="form-label mb-0">Size (px)</label>
             <div class="d-flex align-items-center">
@@ -143,7 +166,6 @@ app.get('/', (req, res) => {
               <span id="sizeValue" class="ms-2 fw-bold">16</span>
             </div>
           </div>
-          <!-- Bold -->
           <div class="col-md-3">
             <label class="form-label mb-0">Bold</label>
             <div class="form-check form-switch mt-1">
@@ -155,7 +177,6 @@ app.get('/', (req, res) => {
     </div>
   </div>
 
-  <!-- Actions -->
   <div class="d-flex flex-wrap gap-2 mb-3">
     <button id="previewBtn" class="btn btn-outline-primary" disabled>👁️ Preview Sample PDF</button>
     <button id="generateBtn" class="btn btn-outline-success" disabled>📦 Generate All & Download ZIP</button>
@@ -164,7 +185,6 @@ app.get('/', (req, res) => {
   <div class="debug text-muted small" id="debugInfo">No field selected</div>
 </div>
 
-<!-- Direction Pad (Mobile) -->
 <div id="directionPad">
   <button class="btn btn-success up">↑</button>
   <button class="btn btn-primary left">←</button>
@@ -173,7 +193,6 @@ app.get('/', (req, res) => {
   <button class="btn btn-danger del" style="grid-column:2; margin-top:6px;">🗑️</button>
 </div>
 
-<!-- Bootstrap 5 JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
@@ -255,7 +274,6 @@ function addField(name) {
     field.style.opacity = "1";
   });
 
-  // Mobile touch drag
   let touchStartX, touchStartY, elementStartX, elementStartY;
   field.addEventListener("touchstart", (e) => {
     const touch = e.touches[0];
@@ -285,10 +303,7 @@ function addField(name) {
     field.style.top = y + 'px';
     field.querySelector('.coords').textContent = \`(\${Math.round(x)}, \${Math.round(y)})\`;
     const f = fields.find(f => f.field === name);
-    if (f) { 
-      f.x = x; 
-      f.y = y; 
-    }
+    if (f) { f.x = x; f.y = y; }
     e.preventDefault();
   });
 
@@ -339,7 +354,6 @@ document.getElementById("template").addEventListener("drop", (e) => {
   }
 });
 
-// Controls
 colorInput.addEventListener('input', () => {
   if (!selectedField) return;
   const color = colorInput.value;
@@ -384,7 +398,6 @@ function hideFieldControls() {
   fieldControls.style.display = 'none';
 }
 
-// Arrow keys
 document.addEventListener("keydown", (e) => {
   if (!selectedField) return;
   const step = e.shiftKey ? 10 : 1;
@@ -412,7 +425,6 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-// Direction pad
 function createDirectionPad() {
   const pad = document.getElementById('directionPad');
   pad.querySelector('.up').onclick = () => simulateKey('ArrowUp');
@@ -457,7 +469,6 @@ function checkReady() {
   document.getElementById("generateBtn").disabled = !isReady;
 }
 
-// Preview
 document.getElementById("previewBtn").addEventListener("click", async () => {
   if (!participants.length) return;
   const sample = participants[0];
@@ -484,7 +495,6 @@ document.getElementById("previewBtn").addEventListener("click", async () => {
   window.open(url, '_blank');
 });
 
-// Generate ZIP
 document.getElementById("generateBtn").addEventListener("click", async () => {
   const payload = {
     participants,
@@ -513,7 +523,6 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
   window.URL.revokeObjectURL(url);
 });
 
-// Init
 window.addEventListener("load", () => {
   createDirectionPad();
 });
@@ -523,33 +532,40 @@ window.addEventListener("load", () => {
   `);
 });
 
-// --- Upload CSV (Cloud, No Local Files) ---
+// --- Upload CSV to Cloudinary (as raw file) ---
 app.post('/upload-csv', upload.single('csv'), async (req, res) => {
   try {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ error: "No file received" });
     }
 
-    // Convert file buffer → string  
-    const content = req.file.buffer.toString("utf8");
+    // Upload to Cloudinary (raw type for CSV)
+    const uploadResult = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { resource_type: 'raw' },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      uploadStream.end(req.file.buffer);
+    });
 
-    // Split lines
+    // Parse CSV from buffer (same logic as before)
+    const content = req.file.buffer.toString("utf8");
     const lines = content.split(/\r?\n/).filter(l => l.trim());
     if (lines.length < 2) {
       return res.status(400).json({ error: "CSV too short" });
     }
 
-    // Extract headers
     const headers = lines[0]
       .split(',')
       .map(h => h.trim().replace(/^"(.*)"$/, '$1'));
 
-    // Parse rows
     const participants = lines.slice(1).map(line => {
       const values = line.match(/("(?:[^"]|"")*"|[^,]*),?/g)
         ?.map(v => v.replace(/,$/, '').trim().replace(/^"(.*)"$/, '$1').replace(/""/g, '"'))
         || line.split(',').map(v => v.trim());
-
       const obj = {};
       headers.forEach((h, i) => {
         obj[h] = values[i] || '';
@@ -563,49 +579,51 @@ app.post('/upload-csv', upload.single('csv'), async (req, res) => {
     });
 
   } catch (e) {
-    console.error("CSV Parse Error:", e);
-    return res.status(500).json({ error: "CSV parse failed" });
+    console.error("CSV Upload/Parse Error:", e);
+    return res.status(500).json({ error: "CSV upload or parse failed" });
   }
 });
 
-
-app.post("/upload-template", upload.single("template"), (req, res) => {
+// --- Upload Template Image to Cloudinary ---
+app.post("/upload-template", upload.single("template"), async (req, res) => {
   if (!req.file || !req.file.buffer) return res.status(400).json({ error: "No file" });
 
-  // Store in memory for the session
-  const templateBuffer = req.file.buffer;
+  try {
+    const uploadResult = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { resource_type: 'image' },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      uploadStream.end(req.file.buffer);
+    });
 
-  // Return a temporary URL for preview (base64)
-  const base64 = templateBuffer.toString("base64");
-  const mime = req.file.mimetype;
-  const templateUrl = `data:${mime};base64,${base64}`;
-
-  res.json({ templateUrl });
+    res.json({ templateUrl: uploadResult.secure_url });
+  } catch (err) {
+    console.error("Template Upload Error:", err);
+    return res.status(500).json({ error: "Image upload failed" });
+  }
 });
 
-
-// --- PREVIEW: Generate ONE PDF ---
+// --- PREVIEW: Generate ONE PDF using Cloudinary template URL ---
 app.post('/preview-pdf', async (req, res) => {
   try {
-    const { participant, templateUrl, fields } = req.body; 
-    // templateUrl is now a base64 Data URL like "data:image/png;base64,..."
+    const { participant, templateUrl, fields } = req.body;
 
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([600, 400]);
 
-    if (templateUrl) {
-      // Use Base64 from memory (templateUrl already Base64)
-  const base64 = templateUrl.split(",")[1];
-  const imageBytes = Buffer.from(base64, "base64");
-  
-  let img;
-  if (templateUrl.includes("jpeg") || templateUrl.includes("jpg")) {
-    img = await pdfDoc.embedJpg(imageBytes);
-  } else if (templateUrl.includes("png")) {
-    img = await pdfDoc.embedPng(imageBytes);
-  }
-
-  if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
+    if (templateUrl && templateUrl.startsWith('http')) {
+      const imageBytes = await getBufferFromUrl(templateUrl);
+      let img;
+      if (templateUrl.includes('.jpg') || templateUrl.includes('.jpeg')) {
+        img = await pdfDoc.embedJpg(imageBytes);
+      } else if (templateUrl.includes('.png')) {
+        img = await pdfDoc.embedPng(imageBytes);
+      }
+      if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
     }
 
     fields.forEach(f => {
@@ -620,14 +638,12 @@ app.post('/preview-pdf', async (req, res) => {
           x: f.x,
           y: 400 - f.y - f.size,
           size: f.size,
-          color: rgb(r, g, b),
-          font: undefined
+          color: rgb(r, g, b)
         });
       }
     });
 
     const pdfBytes = await pdfDoc.save();
-
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename=preview.pdf');
     res.send(Buffer.from(pdfBytes));
@@ -637,73 +653,106 @@ app.post('/preview-pdf', async (req, res) => {
   }
 });
 
-
-// --- Generate ZIP ---
+// --- Generate ZIP with all certificates ---
 app.post('/generate', async (req, res) => {
   try {
     const { participants, templateUrl, fields } = req.body;
 
-    // Create a zip archive in memory
+    // Create archive
     const archive = archiver('zip', { zlib: { level: 9 } });
 
+    // Set headers BEFORE piping
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename=certificates.zip');
 
-    // Pipe archive directly to response (no local file)
+    // Pipe the archive stream to response
     archive.pipe(res);
 
-    // Get image bytes from base64 templateUrl
-    let imageBytes;
-    if (templateUrl) {
-      const base64 = templateUrl.split(",")[1];
-      imageBytes = Buffer.from(base64, "base64");
+    // Load template once (important for speed)
+    let imageBytes = null;
+    if (templateUrl && templateUrl.startsWith('http')) {
+      try {
+        imageBytes = await getBufferFromUrl(templateUrl);
+      } catch (e) {
+        console.error("Template Download Error:", e);
+      }
     }
 
+    // Loop participants
     for (const p of participants) {
+
       const pdfDoc = await PDFDocument.create();
       const page = pdfDoc.addPage([600, 400]);
 
+      // Draw background template image
       if (imageBytes) {
-        let img;
-        if (templateUrl.includes("jpeg") || templateUrl.includes("jpg")) {
-          img = await pdfDoc.embedJpg(imageBytes);
-        } else if (templateUrl.includes("png")) {
-          img = await pdfDoc.embedPng(imageBytes);
+        try {
+          let img;
+          const lower = templateUrl.toLowerCase();
+
+          if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+            img = await pdfDoc.embedJpg(imageBytes);
+          } else if (lower.endsWith('.png')) {
+            img = await pdfDoc.embedPng(imageBytes);
+          }
+
+          if (img) {
+            page.drawImage(img, {
+              x: 0,
+              y: 0,
+              width: 600,
+              height: 400
+            });
+          }
+        } catch (imgErr) {
+          console.error("Image Embed Error:", imgErr);
         }
-        if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
       }
 
-      fields.forEach(f => {
-        const value = (p[f.field] || "").toString();
-        if (value) {
-          const hex = f.color.replace('#', '');
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
+      // Draw fields
+      for (const f of fields) {
+        const value = (p[f.field] || "").toString().trim();
+        if (!value) continue;
 
-          page.drawText(value, {
-            x: f.x,
-            y: 400 - f.y - f.size,
-            size: f.size,
-            color: rgb(r, g, b)
-          });
-        }
-      });
+        // Fix: hex color crash if '#'
+        let hex = (f.color || "#000000").replace('#', '');
+        if (hex.length !== 6) hex = "000000";
 
+        const r = parseInt(hex.substring(0, 2), 16) / 255;
+        const g = parseInt(hex.substring(2, 4), 16) / 255;
+        const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+        page.drawText(value, {
+          x: f.x,
+          y: 400 - f.y - f.size,
+          size: f.size,
+          color: rgb(r, g, b)
+        });
+      }
+
+      // Add to ZIP
       const pdfBytes = await pdfDoc.save();
-      const name = (p.name || p.Name || 'certificate').replace(/[^a-z0-9_-]/gi, '_');
-      archive.append(Buffer.from(pdfBytes), { name: `${name}.pdf` });
+      const safeName = (p.name || p.Name || 'certificate')
+        .toString()
+        .replace(/[^a-z0-9_-]/gi, '_');
+
+      archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
     }
 
-    await archive.finalize();
+    // Finalize archive (stream ends)
+    archive.finalize();
 
   } catch (err) {
     console.error("ZIP Generation Error:", err);
-    res.status(500).json({ error: 'Generation failed' });
+
+    // Prevent double headers
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Generation failed' });
+    }
   }
 });
+
 
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
-
