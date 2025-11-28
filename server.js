@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { dirname, extname } from 'path';
 import { createReadStream, createWriteStream } from 'fs';
 import axios from 'axios';
-
+import fetch from "node-fetch"; // add this at top
 
 const app = express();
 const port = 5000;
@@ -205,18 +205,20 @@ document.getElementById("csvFile").addEventListener("change", async (e) => {
   checkReady();
 });
 
-document.getElementById("templateFile").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append("template", file);
-  const res = await fetch("/upload-template", { method: "POST", body: formData });
-  const data = await res.json();
-  if (data.error) return alert(data.error);
-  templateUrl = data.templateUrl;
-  document.getElementById("template").style.backgroundImage = \`url(\${templateUrl})\`;
-  checkReady();
+// Option A: use public URL
+const templateUrlInput = "https://saas-8nu8.onrender.com/template.jpg"; // <-- your hosted template
+
+const res = await fetch("/upload-template", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ templateUrl: templateUrlInput })
 });
+const data = await res.json();
+templateUrl = data.templateUrl;
+document.getElementById("template").style.backgroundImage = `url(${templateUrl})`;
+checkReady();
+
+
 
 function updateColumnsUI(columns) {
   const div = document.getElementById("columns");
@@ -573,17 +575,11 @@ app.post('/upload-csv', upload.single('csv'), async (req, res) => {
 });
 
 
-app.post("/upload-template", upload.single("template"), (req, res) => {
-  if (!req.file || !req.file.buffer) return res.status(400).json({ error: "No file" });
+app.post("/upload-template", express.json(), (req, res) => {
+  const { templateUrl } = req.body;
+  if (!templateUrl) return res.status(400).json({ error: "No template URL provided" });
 
-  // Store in memory for the session
-  const templateBuffer = req.file.buffer;
-
-  // Return a temporary URL for preview (base64)
-  const base64 = templateBuffer.toString("base64");
-  const mime = req.file.mimetype;
-  const templateUrl = `data:${mime};base64,${base64}`;
-
+  // Just return the URL for preview
   res.json({ templateUrl });
 });
 
@@ -597,20 +593,22 @@ app.post('/preview-pdf', async (req, res) => {
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([600, 400]);
 
-    if (templateUrl) {
-      // Extract base64 part
-      const base64 = templateUrl.split(",")[1];
-      const imageBytes = Buffer.from(base64, "base64");
+ 
 
-      let img;
-      if (/\.jpe?g$/i.test(templateUrl) || templateUrl.includes("jpeg") || templateUrl.includes("jpg")) {
-        img = await pdfDoc.embedJpg(imageBytes);
-      } else if (/\.png$/i.test(templateUrl) || templateUrl.includes("png")) {
-        img = await pdfDoc.embedPng(imageBytes);
-      }
+if (templateUrl) {
+  const response = await fetch(templateUrl);
+  const imageBytes = await response.arrayBuffer();
 
-      if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
-    }
+  let img;
+  if (templateUrl.match(/\.(jpe?g)$/i)) {
+    img = await pdfDoc.embedJpg(imageBytes);
+  } else if (templateUrl.match(/\.png$/i)) {
+    img = await pdfDoc.embedPng(imageBytes);
+  }
+
+  if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
+}
+
 
     fields.forEach(f => {
       const value = (participant[f.field] || "").toString();
@@ -711,4 +709,5 @@ app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 
 });
+
 
