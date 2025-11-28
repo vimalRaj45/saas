@@ -14,12 +14,6 @@ const app = express();
 const port = 5000;
 
 
-try {
-  await fs.access(uploadDir);
-} catch {
-  await fs.mkdir(uploadDir, { recursive: true });
-}
-
 app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -715,4 +709,5 @@ app.post('/generate', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
+
 });
