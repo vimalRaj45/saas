@@ -75,12 +75,13 @@ const upload = multer({
   storage: multer.memoryStorage() // only for handling uploads before sending to Cloudinary
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
 
-// Optional: Explicitly handle root route (not strictly needed if index.html exists)
+// Serve only the homepage
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
+
+
 
 // --- Upload CSV (Parse Only — No Cloudinary Upload) ---
 app.post('/upload-csv', upload.single('csv'), async (req, res) => {
