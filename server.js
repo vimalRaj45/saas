@@ -27,7 +27,7 @@ const upload = multer({
 });
 
 // Serve HTML with enhanced UI (Bootstrap 5 + Bold Toggle)
-app.get('/', (req, res) => {
+app.get('/home', (req, res) => {
   res.send(`
 <!DOCTYPE html>
 <html lang="en">
@@ -711,3 +711,4 @@ app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 
 });
+
