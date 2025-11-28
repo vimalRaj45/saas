@@ -532,30 +532,18 @@ window.addEventListener("load", () => {
   `);
 });
 
-// --- Upload CSV to Cloudinary (as raw file) ---
+// --- Upload CSV (Parse Only — No Cloudinary Upload) ---
 app.post('/upload-csv', upload.single('csv'), async (req, res) => {
   try {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ error: "No file received" });
     }
 
-    // Upload to Cloudinary (raw type for CSV)
-    const uploadResult = await new Promise((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        { resource_type: 'raw' },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(req.file.buffer);
-    });
-
-    // Parse CSV from buffer (same logic as before)
+    // Parse directly from buffer (NO CLOUDINARY UPLOAD)
     const content = req.file.buffer.toString("utf8");
     const lines = content.split(/\r?\n/).filter(l => l.trim());
     if (lines.length < 2) {
-      return res.status(400).json({ error: "CSV too short" });
+      return res.status(400).json({ error: "CSV must have headers and at least one row" });
     }
 
     const headers = lines[0]
@@ -563,9 +551,11 @@ app.post('/upload-csv', upload.single('csv'), async (req, res) => {
       .map(h => h.trim().replace(/^"(.*)"$/, '$1'));
 
     const participants = lines.slice(1).map(line => {
+      // Robust CSV parsing (handles quoted fields)
       const values = line.match(/("(?:[^"]|"")*"|[^,]*),?/g)
         ?.map(v => v.replace(/,$/, '').trim().replace(/^"(.*)"$/, '$1').replace(/""/g, '"'))
         || line.split(',').map(v => v.trim());
+      
       const obj = {};
       headers.forEach((h, i) => {
         obj[h] = values[i] || '';
@@ -579,8 +569,8 @@ app.post('/upload-csv', upload.single('csv'), async (req, res) => {
     });
 
   } catch (e) {
-    console.error("CSV Upload/Parse Error:", e);
-    return res.status(500).json({ error: "CSV upload or parse failed" });
+    console.error("CSV Parse Error:", e);
+    return res.status(500).json({ error: "Failed to parse CSV file" });
   }
 });
 
@@ -756,3 +746,4 @@ app.post('/generate', async (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
+
