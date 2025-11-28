@@ -6,6 +6,23 @@ import { v2 as cloudinary } from 'cloudinary';
 import https from 'https';
 import http from 'http';
 import dotenv from 'dotenv';
+import fetch from "node-fetch"; // npm install node-fetch
+
+import fontkit from '@pdf-lib/fontkit';
+
+// Create PDF document
+const pdfDoc = await PDFDocument.create();
+
+// Register fontkit
+pdfDoc.registerFontkit(fontkit);
+
+// Now you can embed the dynamic Unicode font
+const fontUrl = "https://github.com/googlefonts/noto-fonts/blob/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf?raw=true";
+const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
+const customFont = await pdfDoc.embedFont(fontBytes);
+
+
+
 dotenv.config();
 
 
@@ -599,82 +616,128 @@ app.post("/upload-template", upload.single("template"), async (req, res) => {
 
 // --- PREVIEW: Generate ONE PDF using Cloudinary template URL ---
 app.post('/preview-pdf', async (req, res) => {
+  console.log("\n-----------------------------------------");
+  console.log("📌 PREVIEW API HIT");
+  console.log("-----------------------------------------");
+
   try {
+    console.log("➡ Step 1: Extracting body data...");
     const { participant, templateUrl, fields } = req.body;
+    console.log("   participant:", participant);
+    console.log("   templateUrl:", templateUrl);
+    console.log("   fields:", fields);
 
+    console.log("➡ Step 2: Creating new PDF document...");
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([600, 400]);
+    pdfDoc.registerFontkit(fontkit); // <-- ADD THIS HERE
+    console.log("   ✔ PDFDocument created");
 
-    // Load template image if provided
-    if (templateUrl && templateUrl.startsWith('http')) {
-      const imageBytes = await getBufferFromUrl(templateUrl);
-      let img;
-      const lowerUrl = templateUrl.toLowerCase();
-      
-      if (lowerUrl.includes('.jpg') || lowerUrl.includes('.jpeg')) {
-        img = await pdfDoc.embedJpg(imageBytes);
-      } else if (lowerUrl.includes('.png')) {
-        img = await pdfDoc.embedPng(imageBytes);
+    console.log("➡ Step 3: Adding page...");
+    const page = pdfDoc.addPage([600, 400]);
+    console.log("   ✔ Page added (600x400)");
+
+    // -------------------------------
+    // Step 4: Load Unicode font dynamically
+    console.log("➡ Step 4: Fetching Unicode font from web...");
+    const fontUrl = "https://github.com/googlefonts/noto-fonts/blob/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf?raw=true";
+    const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
+    const customFont = await pdfDoc.embedFont(fontBytes);
+    console.log("   ✔ Unicode font loaded & embedded");
+
+    // -------------------------------
+    // Step 5: Load template image
+    if (templateUrl && templateUrl.startsWith("http")) {
+      console.log("➡ Step 5: Downloading template image...");
+      try {
+        const imageBytes = await getBufferFromUrl(templateUrl);
+        console.log("   ✔ Template image fetched");
+
+        let img;
+        const lowerUrl = templateUrl.toLowerCase();
+
+        if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg")) {
+          console.log("   ➡ Embedding JPG...");
+          img = await pdfDoc.embedJpg(imageBytes);
+          console.log("   ✔ JPG embedded");
+        } else if (lowerUrl.endsWith(".png")) {
+          console.log("   ➡ Embedding PNG...");
+          img = await pdfDoc.embedPng(imageBytes);
+          console.log("   ✔ PNG embedded");
+        }
+
+        if (img) {
+          console.log("   ➡ Drawing template image...");
+          page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
+          console.log("   ✔ Template placed on page");
+        }
+      } catch (imgErr) {
+        console.error("   ❌ Template loading failed:", imgErr);
       }
-      
-      if (img) {
-        page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
-      }
+    } else {
+      console.log("   ℹ No template URL provided or not HTTP");
     }
 
-    // Draw fields with sanitized text
-    fields.forEach(f => {
-      // ✅ SANITIZE TEXT TO AVOID WinAnsi ENCODING ERRORS
-      let value = participant[f.field] != null ? String(participant[f.field]) : "";
-      
-      // Remove ANSI escape codes (e.g., \x1b[31m)
-      value = value.replace(/\x1b\[[0-9;]*m/g, '');
-      
-      // Remove control characters (except \t, \n, \r)
-      value = value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-      
-      // Replace common problematic Unicode chars
-      const replacements = {
-        '“': '"', '”': '"', 
-        '‘': "'", '’': "'",
-        '–': '-', '—': '--', 
-        '…': '...', ' ': ' '
-      };
-      Object.keys(replacements).forEach(key => {
-        value = value.split(key).join(replacements[key]);
-      });
-      
+    // -------------------------------
+    // Step 6: Draw fields
+    console.log("➡ Step 6: Drawing fields...");
+    for (const f of fields) {
+      console.log(`   ➡ Field: ${f.field}`);
+
+      let value = participant[f.field] ? String(participant[f.field]) : "";
       value = value.trim();
+      console.log(`      Raw value: "${value}"`);
 
-      if (!value) return; // Skip empty fields
+      if (!value) {
+        console.log("      ⚠ Empty value, skipping...");
+        continue;
+      }
 
-      // Parse color safely
-      let hex = (f.color || '#000000').replace('#', '');
-      if (hex.length !== 6) hex = '000000'; // Fallback to black
+      let hex = (f.color || "#000000").replace("#", "");
+      if (hex.length !== 6) hex = "000000";
 
       const r = parseInt(hex.substring(0, 2), 16) / 255;
       const g = parseInt(hex.substring(2, 4), 16) / 255;
       const b = parseInt(hex.substring(4, 6), 16) / 255;
 
-      page.drawText(value, {
-        x: f.x,
-        y: 400 - f.y - f.size,
-        size: f.size,
-        color: rgb(r, g, b)
-      });
-    });
+      console.log(`      ✔ Position: (${f.x}, ${400 - f.y - f.size})`);
+      console.log(`      ✔ Font Size: ${f.size}`);
+      console.log(`      ✔ Color: rgb(${r}, ${g}, ${b})`);
 
+      try {
+        page.drawText(value, {
+          x: f.x,
+          y: 400 - f.y - f.size,
+          size: f.size,
+          font: customFont, // <-- Unicode font
+          color: rgb(r, g, b)
+        });
+        console.log("      ✔ Text drawn");
+      } catch (drawErr) {
+        console.error("      ❌ Error drawing text:", drawErr);
+      }
+    }
+
+    // -------------------------------
+    console.log("➡ Step 7: Saving PDF...");
     const pdfBytes = await pdfDoc.save();
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename=preview.pdf');
+    console.log("   ✔ PDF saved successfully");
+
+    console.log("➡ Step 8: Sending PDF as response...");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "inline; filename=preview.pdf");
     res.send(Buffer.from(pdfBytes));
+
+    console.log("🎉 PREVIEW COMPLETED SUCCESSFULLY");
+    console.log("-----------------------------------------\n");
+
   } catch (err) {
-    console.error("Preview PDF Error:", err);
-    res.status(500).json({ 
-      error: 'Preview failed: ' + (err.message || 'Unknown error') 
+    console.error("🔥 Overall Preview PDF Error:", err);
+    res.status(500).json({
+      error: "Preview failed: " + (err.message || "Unknown error")
     });
   }
 });
+
 
 // --- Generate ZIP with all certificates ---
 app.post('/generate', async (req, res) => {
