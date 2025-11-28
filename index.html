@@ -2060,14 +2060,36 @@
       updateDebug();
     });
   </script>
-  <!-- Professional Offer Badge -->
+ <!-- Professional Offer Badge -->
 <div id="offerBadge" style="
   position: fixed;
   top: 90px;
   left: 20px;
   z-index: 9999;
   font-family: 'Outfit', sans-serif;
+  background: transparent;
+  display: inline-block;
 ">
+
+  <!-- Close Badge Button -->
+  <button id="closeBadge" style="
+      position: absolute;
+      top: -10px;
+      right: -10px;
+      background: #D4AF37;
+      color: #0D1B2A;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      transition: all 0.3s ease;
+  ">×</button>
 
   <!-- Offer Button -->
   <button id="offerBtn" style="
@@ -2088,16 +2110,9 @@
     gap: 8px;
     letter-spacing: 0.5px;
   ">
-    <span style="
-      display: inline-block;
-      animation: gentlePulse 2s infinite ease-in-out;
-    ">✨</span>
+    <span style="display: inline-block; animation: gentlePulse 2s infinite ease-in-out;">✨</span>
     Limited Time Offer
-    <span style="
-      display: inline-block;
-      animation: gentlePulse 2s infinite ease-in-out;
-      animation-delay: 0.5s;
-    ">✨</span>
+    <span style="display: inline-block; animation: gentlePulse 2s infinite ease-in-out; animation-delay: 0.5s;">✨</span>
   </button>
 
   <!-- Offer Tooltip -->
@@ -2117,11 +2132,22 @@
     opacity: 0;
     transform: translateY(-10px);
     transition: all 0.3s ease;
-    pointer-events: none;
+    pointer-events: auto;
     white-space: nowrap;
     z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   ">
-    Click to see exclusive MVP benefits
+    <span>Click to see exclusive MVP benefits</span>
+    <button id="closeTooltip" style="
+        background: none;
+        border: none;
+        color: #D4AF37;
+        font-size: 14px;
+        cursor: pointer;
+        padding: 2px 5px;
+    ">×</button>
   </div>
 
 </div>
@@ -2174,9 +2200,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-    ">
-      ×
-    </button>
+    ">×</button>
 
     <!-- Header -->
     <div style="text-align: center; margin-bottom: 30px;">
@@ -2190,9 +2214,7 @@
         display: inline-block;
         margin-bottom: 15px;
         letter-spacing: 1px;
-      ">
-        MVP LAUNCH SPECIAL
-      </div>
+      ">MVP LAUNCH SPECIAL</div>
       <h3 style="
         color: #F7F2E7;
         margin: 0;
@@ -2201,9 +2223,7 @@
         background: linear-gradient(135deg, #D4AF37, #F7D873);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-      ">
-        Exclusive Early Access
-      </h3>
+      ">Exclusive Early Access</h3>
     </div>
 
     <!-- Benefits -->
@@ -2223,7 +2243,6 @@
           <div style="font-size: 14px; opacity: 0.9;">All features unlocked during MVP phase</div>
         </div>
       </div>
-
       <div style="
         display: flex;
         align-items: center;
@@ -2239,7 +2258,6 @@
           <div style="font-size: 14px; opacity: 0.9;">No credit card required</div>
         </div>
       </div>
-
       <div style="
         display: flex;
         align-items: center;
@@ -2269,9 +2287,7 @@
       width: 100%;
       transition: all 0.3s ease;
       box-shadow: 0 4px 20px rgba(212, 175, 55, 0.4);
-    ">
-      Start Creating Certificates Now
-    </button>
+    ">Start Creating Certificates Now</button>
 
     <!-- Footer Note -->
     <div style="
@@ -2279,115 +2295,99 @@
       margin-top: 20px;
       font-size: 12px;
       opacity: 0.7;
-    ">
-      This special offer is available for a limited time only
-    </div>
+    ">This special offer is available for a limited time only</div>
 
   </div>
-
 </div>
 
-<!-- Enhanced Animations + Script -->
+<!-- Styles and Animations -->
 <style>
-  /* Gentle Pulse Animation */
-  @keyframes gentlePulse {
-    0%, 100% { 
-      opacity: 1;
-      transform: scale(1);
-    }
-    50% { 
-      opacity: 0.8;
-      transform: scale(1.1);
-    }
-  }
-
-  /* Button Hover Effects */
-  #offerBtn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 30px rgba(212, 175, 55, 0.6);
-  }
-
-  #offerBtn:active {
-    transform: translateY(0);
-  }
-
-  /* Close Button Hover */
-  #closeModal:hover {
-    background: rgba(212, 175, 55, 0.2);
-    transform: rotate(90deg);
-  }
-
-  /* CTA Button Hover */
-  #offerModal button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 30px rgba(212, 175, 55, 0.6);
-  }
+@keyframes gentlePulse {
+  0%,100%{opacity:1;transform:scale(1);}
+  50%{opacity:0.8;transform:scale(1.1);}
+}
+#offerBtn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(212,175,55,0.6);}
+#offerBtn:active { transform: translateY(0);}
+#closeModal:hover { background: rgba(212,175,55,0.2); transform: rotate(90deg);}
+#offerModal button:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(212,175,55,0.6);}
+#closeBadge:hover { background: #F7D873; transform: scale(1.1);}
+#closeTooltip:hover { color: #F7D873; transform: scale(1.2);}
 </style>
 
+<!-- Script -->
 <script>
-  const offerBadge = document.getElementById("offerBadge");
-  const offerBtn = document.getElementById("offerBtn");
-  const offerTooltip = document.getElementById("offerTooltip");
-  const offerModal = document.getElementById("offerModal");
-  const closeModal = document.getElementById("closeModal");
-  const modalContent = offerModal.querySelector('div > div');
+const offerBadge = document.getElementById("offerBadge");
+const offerBtn = document.getElementById("offerBtn");
+const offerTooltip = document.getElementById("offerTooltip");
+const closeTooltip = document.getElementById("closeTooltip");
+const closeBadge = document.getElementById("closeBadge");
+const offerModal = document.getElementById("offerModal");
+const closeModal = document.getElementById("closeModal");
+const modalContent = offerModal.querySelector('div > div');
 
-  let tooltipTimeout;
+let tooltipTimeout;
 
-  // Show tooltip on hover
-  offerBtn.addEventListener('mouseenter', () => {
-    clearTimeout(tooltipTimeout);
-    offerTooltip.style.opacity = '1';
-    offerTooltip.style.transform = 'translateY(0)';
-  });
+// Tooltip hover behavior
+offerBtn.addEventListener('mouseenter', () => {
+  clearTimeout(tooltipTimeout);
+  offerTooltip.style.opacity = '1';
+  offerTooltip.style.transform = 'translateY(0)';
+});
+offerBtn.addEventListener('mouseleave', () => {
+  tooltipTimeout = setTimeout(() => {
+    offerTooltip.style.opacity = '0';
+    offerTooltip.style.transform = 'translateY(-10px)';
+  }, 300);
+});
 
-  offerBtn.addEventListener('mouseleave', () => {
-    tooltipTimeout = setTimeout(() => {
-      offerTooltip.style.opacity = '0';
-      offerTooltip.style.transform = 'translateY(-10px)';
-    }, 300);
-  });
+// Tooltip close button
+closeTooltip.addEventListener('click', () => {
+  offerTooltip.style.opacity = '0';
+  offerTooltip.style.transform = 'translateY(-10px)';
+  clearTimeout(tooltipTimeout);
+});
 
-  // Show modal on click
-  offerBtn.addEventListener('click', () => {
-    offerModal.style.display = 'flex';
-    setTimeout(() => {
-      offerModal.style.opacity = '1';
-      modalContent.style.transform = 'scale(1)';
-    }, 10);
-  });
+// Badge close button
+closeBadge.addEventListener('click', () => {
+  offerBadge.style.display = 'none';
+});
 
-  // Close modal
-  closeModal.addEventListener('click', () => {
+// Show modal on button click
+offerBtn.addEventListener('click', () => {
+  offerModal.style.display = 'flex';
+  setTimeout(() => {
+    offerModal.style.opacity = '1';
+    modalContent.style.transform = 'scale(1)';
+  }, 10);
+});
+
+// Close modal
+closeModal.addEventListener('click', () => {
+  offerModal.style.opacity = '0';
+  modalContent.style.transform = 'scale(0.9)';
+  setTimeout(() => { offerModal.style.display = 'none'; }, 300);
+});
+
+// Close modal when clicking outside
+offerModal.addEventListener('click', (e) => {
+  if(e.target === offerModal){
     offerModal.style.opacity = '0';
     modalContent.style.transform = 'scale(0.9)';
-    setTimeout(() => {
-      offerModal.style.display = 'none';
-    }, 300);
-  });
+    setTimeout(()=>{ offerModal.style.display='none'; },300);
+  }
+});
 
-  // Close modal when clicking outside
-  offerModal.addEventListener('click', (e) => {
-    if (e.target === offerModal) {
-      offerModal.style.opacity = '0';
-      modalContent.style.transform = 'scale(0.9)';
-      setTimeout(() => {
-        offerModal.style.display = 'none';
-      }, 300);
-    }
-  });
-
-  // Close modal with Escape key
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && offerModal.style.display === 'flex') {
-      offerModal.style.opacity = '0';
-      modalContent.style.transform = 'scale(0.9)';
-      setTimeout(() => {
-        offerModal.style.display = 'none';
-      }, 300);
-    }
-  });
+// Close modal with Escape key
+document.addEventListener('keydown',(e)=>{
+  if(e.key==='Escape' && offerModal.style.display==='flex'){
+    offerModal.style.opacity='0';
+    modalContent.style.transform='scale(0.9)';
+    setTimeout(()=>{ offerModal.style.display='none'; },300);
+  }
+});
 </script>
+
+
 
 </body>
 </html>
