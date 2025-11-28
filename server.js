@@ -13,7 +13,7 @@ import axios from 'axios';
 const app = express();
 const port = 5000;
 
-app.use(express.json({ limit: '30mb' }));
+app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const upload = multer({
@@ -706,3 +706,4 @@ app.post('/generate', async (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
+
