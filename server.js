@@ -605,32 +605,63 @@ app.post('/preview-pdf', async (req, res) => {
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([600, 400]);
 
+    // Load template image if provided
     if (templateUrl && templateUrl.startsWith('http')) {
       const imageBytes = await getBufferFromUrl(templateUrl);
       let img;
-      if (templateUrl.includes('.jpg') || templateUrl.includes('.jpeg')) {
+      const lowerUrl = templateUrl.toLowerCase();
+      
+      if (lowerUrl.includes('.jpg') || lowerUrl.includes('.jpeg')) {
         img = await pdfDoc.embedJpg(imageBytes);
-      } else if (templateUrl.includes('.png')) {
+      } else if (lowerUrl.includes('.png')) {
         img = await pdfDoc.embedPng(imageBytes);
       }
-      if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
+      
+      if (img) {
+        page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
+      }
     }
 
+    // Draw fields with sanitized text
     fields.forEach(f => {
-      const value = (participant[f.field] || "").toString();
-      if (value) {
-        const hex = f.color.replace('#', '');
-        const r = parseInt(hex.substring(0, 2), 16) / 255;
-        const g = parseInt(hex.substring(2, 4), 16) / 255;
-        const b = parseInt(hex.substring(4, 6), 16) / 255;
+      // ✅ SANITIZE TEXT TO AVOID WinAnsi ENCODING ERRORS
+      let value = participant[f.field] != null ? String(participant[f.field]) : "";
+      
+      // Remove ANSI escape codes (e.g., \x1b[31m)
+      value = value.replace(/\x1b\[[0-9;]*m/g, '');
+      
+      // Remove control characters (except \t, \n, \r)
+      value = value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      
+      // Replace common problematic Unicode chars
+      const replacements = {
+        '“': '"', '”': '"', 
+        '‘': "'", '’': "'",
+        '–': '-', '—': '--', 
+        '…': '...', ' ': ' '
+      };
+      Object.keys(replacements).forEach(key => {
+        value = value.split(key).join(replacements[key]);
+      });
+      
+      value = value.trim();
 
-        page.drawText(value, {
-          x: f.x,
-          y: 400 - f.y - f.size,
-          size: f.size,
-          color: rgb(r, g, b)
-        });
-      }
+      if (!value) return; // Skip empty fields
+
+      // Parse color safely
+      let hex = (f.color || '#000000').replace('#', '');
+      if (hex.length !== 6) hex = '000000'; // Fallback to black
+
+      const r = parseInt(hex.substring(0, 2), 16) / 255;
+      const g = parseInt(hex.substring(2, 4), 16) / 255;
+      const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+      page.drawText(value, {
+        x: f.x,
+        y: 400 - f.y - f.size,
+        size: f.size,
+        color: rgb(r, g, b)
+      });
     });
 
     const pdfBytes = await pdfDoc.save();
@@ -639,7 +670,9 @@ app.post('/preview-pdf', async (req, res) => {
     res.send(Buffer.from(pdfBytes));
   } catch (err) {
     console.error("Preview PDF Error:", err);
-    res.status(500).json({ error: 'Preview failed' });
+    res.status(500).json({ 
+      error: 'Preview failed: ' + (err.message || 'Unknown error') 
+    });
   }
 });
 
@@ -746,4 +779,3 @@ app.post('/generate', async (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
-
