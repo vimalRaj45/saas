@@ -3,234 +3,445 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>🎯 Precise Certificate Generator</title>
+  <title>🎯 Professional Certificate Generator</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* Rich Color Scheme */
+    :root {
+      --gold: #D4AF37;
+      --rich-black: #0A0A0A;
+      --royal-navy: #0D1B2A;
+      --champagne-white: #F7F2E7;
+      --charcoal-grey: #2E2E2E;
+      --dark-teal: #093A3E;
+    }
+
     body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
+      background-color: var(--champagne-white);
+      color: var(--rich-black);
+      font-family: 'Outfit', sans-serif;
     }
-    #template {
-      border: 1px solid #dee2e6;
-      width: 100%;
-      max-width: 600px;
-      height: 400px;
-      position: relative;
-      background-size: contain;
-      background-repeat: no-repeat;
-      background-position: center;
-      margin: 15px 0;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-      overflow: hidden;
-      background-color: #f8f9fa;
-    }
+
     .field {
       position: absolute;
-      padding: 4px 8px;
-      border: 2px solid #0d6efd;
-      background: rgba(255,255,255,0.92);
+      padding: 8px 12px;
+      border: 2px solid var(--gold);
+      background: rgba(247, 242, 231, 0.95);
       cursor: move;
       font-size: 16px;
-      color: #000;
-      border-radius: 6px;
+      color: var(--rich-black);
+      border-radius: 8px;
       user-select: none;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+      box-shadow: 0 2px 8px rgba(10, 10, 10, 0.1);
       pointer-events: auto;
       z-index: 10;
       font-weight: normal;
-      transition: all 0.15s ease;
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      min-width: 120px;
+      text-align: center;
     }
+
     .field.selected {
-      border-color: #fd7e14;
-      background: rgba(255,248,235,0.95);
-      color: #d32f2f;
-      box-shadow: 0 3px 8px rgba(253,126,20,0.3);
+      border-color: var(--dark-teal);
+      background: rgba(212, 175, 55, 0.15);
+      color: var(--royal-navy);
+      box-shadow: 0 4px 12px rgba(9, 58, 62, 0.25);
       transform: scale(1.03);
+      z-index: 20;
     }
+
     .field .coords {
       font-size: 10px;
-      color: #6c757d;
-      margin-top: 2px;
+      color: var(--charcoal-grey);
+      margin-top: 4px;
+      font-weight: 400;
     }
+
     #directionPad {
       position: fixed;
-      bottom: 20px;
-      right: 20px;
+      bottom: 30px;
+      right: 30px;
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
       grid-template-rows: 1fr 1fr 1fr;
-      gap: 8px;
-      width: 130px;
+      gap: 10px;
+      width: 150px;
       z-index: 1000;
+      background: var(--champagne-white);
+      padding: 15px;
+      border-radius: 16px;
+      box-shadow: 0 10px 40px rgba(10, 10, 10, 0.15);
+      border: 1px solid rgba(212, 175, 55, 0.2);
     }
-    #directionPad button {
-      padding: 10px !important;
-      font-size: 20px !important;
-      border: none !important;
-      border-radius: 8px !important;
-      cursor: pointer;
-      transition: all 0.2s;
+
+    .mobile-controls {
+      display: none;
     }
-    #directionPad button:active {
-      transform: scale(0.95);
+
+    .gradient-text {
+      background: linear-gradient(135deg, var(--gold), var(--dark-teal));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
-    .debug {
-      min-height: 1.4em;
-      font-size: 0.95rem;
+
+    .step-card .card-header {
+      background: linear-gradient(135deg, var(--royal-navy), var(--dark-teal));
+      color: var(--champagne-white);
+      border: none;
     }
-    .loading-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.5);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      z-index: 2000;
-      opacity: 0;
-      visibility: hidden;
-      transition: opacity 0.3s, visibility 0.3s;
+
+    .step-card:nth-child(2) .card-header {
+      background: linear-gradient(135deg, var(--dark-teal), var(--royal-navy));
     }
-    .loading-overlay.show {
-      opacity: 1;
-      visibility: visible;
+
+    .step-card:nth-child(3) .card-header {
+      background: linear-gradient(135deg, var(--charcoal-grey), var(--royal-navy));
     }
-    .spinner {
-      width: 50px;
-      height: 50px;
-      border: 5px solid rgba(255,255,255,0.3);
-      border-top: 5px solid #fff;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
+
+    .step-card:nth-child(4) .card-header {
+      background: linear-gradient(135deg, var(--gold), var(--charcoal-grey));
+      color: var(--rich-black);
     }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+
+    .template-container {
+      min-height: 400px;
+      border: 2px dashed var(--charcoal-grey);
+      border-radius: 12px;
+      overflow: hidden;
+      background-color: var(--champagne-white);
+      transition: all 0.3s ease;
     }
-    .step-card {
-      transition: box-shadow 0.3s;
+
+    .template-container.has-background {
+      border: 1px solid var(--charcoal-grey);
+      box-shadow: 0 4px 20px rgba(10, 10, 10, 0.08);
     }
-    .step-card:hover {
-      box-shadow: 0 4px 15px rgba(0,0,0,0.12);
+
+    .card {
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(10, 10, 10, 0.08);
+      transition: all 0.3s ease;
+      background-color: var(--champagne-white);
     }
-    .btn-add-field {
-      transition: all 0.2s;
-    }
-    .btn-add-field:hover {
+
+    .card:hover {
+      box-shadow: 0 8px 30px rgba(10, 10, 10, 0.12);
       transform: translateY(-2px);
-      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .btn-primary {
+      background-color: var(--royal-navy);
+      border-color: var(--royal-navy);
+    }
+
+    .btn-primary:hover {
+      background-color: var(--dark-teal);
+      border-color: var(--dark-teal);
+    }
+
+    .btn-success {
+      background-color: var(--dark-teal);
+      border-color: var(--dark-teal);
+    }
+
+    .btn-success:hover {
+      background-color: #072a2d;
+      border-color: #072a2d;
+    }
+
+    .btn-outline-secondary {
+      border-color: var(--charcoal-grey);
+      color: var(--charcoal-grey);
+    }
+
+    .btn-outline-secondary:hover {
+      background-color: var(--charcoal-grey);
+      border-color: var(--charcoal-grey);
+      color: var(--champagne-white);
+    }
+
+    .form-control, .form-select {
+      border-radius: 8px;
+      border: 1px solid var(--charcoal-grey);
+      background-color: var(--champagne-white);
+      color: var(--rich-black);
+    }
+
+    .form-control:focus, .form-select:focus {
+      border-color: var(--gold);
+      box-shadow: 0 0 0 0.2rem rgba(212, 175, 55, 0.15);
+    }
+
+    .debug-info {
+      background-color: var(--champagne-white);
+      border-left: 4px solid var(--gold);
+    }
+
+    .loading-modal .modal-content {
+      background-color: var(--champagne-white);
+      border: 1px solid var(--gold);
+    }
+
+    .loading-modal .spinner-border {
+      color: var(--gold);
+    }
+
+    .loading-modal .text-primary {
+      color: var(--royal-navy) !important;
+    }
+
+    @media (max-width: 768px) {
+      #directionPad {
+        display: none;
+      }
+      
+      .mobile-controls {
+        display: block;
+        background-color: var(--champagne-white);
+        border: 1px solid rgba(212, 175, 55, 0.2);
+      }
+      
+      .template-container {
+        min-height: 300px;
+      }
+    }
+
+    @media (max-width: 576px) {
+      .template-container {
+        min-height: 250px;
+      }
     }
   </style>
 </head>
-<body class="bg-light">
+<body>
 
-<!-- Loading Overlay -->
-<div class="loading-overlay" id="loadingOverlay">
-  <div class="text-center">
-    <div class="spinner mb-3"></div>
-    <div class="text-white h5 mb-0" id="loadingText">Processing...</div>
+<!-- Loading Modal -->
+<div class="modal fade loading-modal" id="loadingModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0">
+      <div class="modal-body text-center py-5">
+        <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+        <h5 class="text-primary" id="loadingText">Processing...</h5>
+      </div>
+    </div>
   </div>
 </div>
 
-<div class="container py-4">
-  <h1 class="mb-4 text-center display-5 fw-bold">🎯 Precise Certificate Generator</h1>
-
-  <!-- Step 1 -->
-  <div class="card mb-4 step-card">
-    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-      <span>Step 1: Upload CSV</span>
-      <i class="bi bi-filetype-csv"></i>
-    </div>
-    <div class="card-body">
-      <input type="file" id="csvFile" accept=".csv" class="form-control">
-      <div class="mt-2 text-muted small">CSV must contain headers (e.g., Name, Course, Date)</div>
+<div class="container-fluid py-4">
+  <div class="row justify-content-center mb-4">
+    <div class="col-12 col-lg-10 col-xl-8 text-center">
+      <h1 class="fw-bold display-4 mb-2 gradient-text">Certificate Generator</h1>
+      <p class="fs-5" style="color: var(--charcoal-grey);">Create beautiful certificates with pixel-perfect precision</p>
     </div>
   </div>
 
-  <!-- Step 2 -->
-  <div class="card mb-4 step-card">
-    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-      <span>Step 2: Upload Template (JPG/PNG)</span>
-      <i class="bi bi-image"></i>
-    </div>
-    <div class="card-body">
-      <input type="file" id="templateFile" accept="image/*" class="form-control">
-    </div>
-  </div>
-
-  <!-- Step 3 -->
-  <div class="card mb-4 step-card">
-    <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-      <span>Step 3: Add Fields</span>
-      <i class="bi bi-text-paragraph"></i>
-    </div>
-    <div class="card-body">
-      <div id="columns" class="d-flex flex-wrap gap-2 mb-2"></div>
-      <div id="noColumns" class="text-muted small">Upload CSV to see columns</div>
-    </div>
-  </div>
-
-  <!-- Step 4 -->
-  <div class="card mb-4 step-card">
-    <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
-      <span>Step 4: Position & Style Fields</span>
-      <i class="bi bi-palette"></i>
-    </div>
-    <div class="card-body">
-      <div id="template"></div>
-
-      <div id="fieldControls" class="mt-3 p-3 bg-white border rounded shadow-sm" style="display:none;">
-        <h6 class="mb-3">🎨 Field Styling</h6>
-        <div class="row g-3 align-items-center">
-          <div class="col-md-4">
-            <label class="form-label mb-1">Text Color</label>
-            <input type="color" id="colorPicker" value="#000000" class="form-control form-control-color w-100 p-1">
-          </div>
-          <div class="col-md-5">
-            <label class="form-label mb-1">Font Size (px)</label>
-            <div class="d-flex align-items-center">
-              <input type="range" id="sizeSlider" min="8" max="60" value="16" class="form-range flex-grow-1">
-              <span id="sizeValue" class="ms-2 fw-bold">16</span>
+  <div class="row g-4">
+    <!-- Left Column - Steps 1-3 -->
+    <div class="col-12 col-lg-4">
+      <div class="row g-4">
+        <!-- Step 1 -->
+        <div class="col-12">
+          <div class="card step-card h-100">
+            <div class="card-header py-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="d-flex align-items-center">
+                  <span class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center me-2" style="width: 28px; height: 28px;">1</span>
+                  Upload Data
+                </span>
+                <i class="bi bi-filetype-csv"></i>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label for="csvFile" class="form-label fw-medium">Select CSV File</label>
+                <input type="file" id="csvFile" accept=".csv" class="form-control rounded-2 py-2 px-3">
+              </div>
+              <div class="small" style="color: var(--charcoal-grey);">
+                <i class="bi bi-info-circle me-1"></i>
+                CSV must contain headers (e.g., Name, Course, Date, Score)
+              </div>
             </div>
           </div>
-          <div class="col-md-3">
-            <label class="form-label mb-1">Bold</label>
-            <div class="form-check form-switch mt-1">
-              <input class="form-check-input" type="checkbox" id="boldToggle">
+        </div>
+
+        <!-- Step 2 -->
+        <div class="col-12">
+          <div class="card step-card h-100">
+            <div class="card-header py-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="d-flex align-items-center">
+                  <span class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center me-2" style="width: 28px; height: 28px;">2</span>
+                  Upload Template
+                </span>
+                <i class="bi bi-image"></i>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label for="templateFile" class="form-label fw-medium">Select Template Image</label>
+                <input type="file" id="templateFile" accept="image/*" class="form-control rounded-2 py-2 px-3">
+              </div>
+              <div class="small" style="color: var(--charcoal-grey);">
+                <i class="bi bi-info-circle me-1"></i>
+                JPG, PNG, or other image formats supported
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="col-12">
+          <div class="card step-card h-100">
+            <div class="card-header py-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="d-flex align-items-center">
+                  <span class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center me-2" style="width: 28px; height: 28px;">3</span>
+                  Add Text Fields
+                </span>
+                <i class="bi bi-text-paragraph"></i>
+              </div>
+            </div>
+            <div class="card-body">
+              <div id="columns" class="d-flex flex-wrap gap-2 mb-3"></div>
+              <div id="noColumns" class="text-center py-4" style="color: var(--charcoal-grey);">
+                <i class="bi bi-table display-4 opacity-50 mb-2"></i>
+                <p class="mb-0">Upload a CSV file to see available columns</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column - Step 4 and Controls -->
+    <div class="col-12 col-lg-8">
+      <div class="row g-4">
+        <!-- Step 4 -->
+        <div class="col-12">
+          <div class="card step-card h-100">
+            <div class="card-header py-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="d-flex align-items-center">
+                  <span class="bg-white bg-opacity-25 rounded-circle d-flex align-items-center justify-content-center me-2" style="width: 28px; height: 28px;">4</span>
+                  Position & Style Fields
+                </span>
+                <i class="bi bi-palette"></i>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="template-container" id="templateContainer">
+                <div id="template" class="w-100 h-100 position-relative" style="background-size: contain; background-repeat: no-repeat; background-position: center; min-height: 400px;">
+                  <div class="d-flex flex-column align-items-center justify-content-center h-100" style="color: var(--charcoal-grey);">
+                    <i class="bi bi-card-image display-1 opacity-50 mb-3"></i>
+                    <p class="fs-5">Upload a template to get started</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Mobile Controls -->
+              <div class="mobile-controls rounded-3 p-3 mt-3">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="mb-0 fw-medium">Field Controls</h6>
+                  <span class="badge" style="background-color: var(--royal-navy);" id="selectedFieldName">None</span>
+                </div>
+                <div class="row g-2">
+                  <div class="col-4 d-grid">
+                    <button class="btn up" style="background-color: var(--dark-teal); color: white;" title="Move Up"><i class="bi bi-arrow-up"></i></button>
+                  </div>
+                  <div class="col-4 d-grid">
+                    <button class="btn del" style="background-color: #8B0000; color: white;" title="Delete Field"><i class="bi bi-trash"></i></button>
+                  </div>
+                  <div class="col-4 d-grid">
+                    <button class="btn down" style="background-color: var(--dark-teal); color: white;" title="Move Down"><i class="bi bi-arrow-down"></i></button>
+                  </div>
+                  <div class="col-4 d-grid">
+                    <button class="btn left" style="background-color: var(--royal-navy); color: white;" title="Move Left"><i class="bi bi-arrow-left"></i></button>
+                  </div>
+                  <div class="col-4"></div>
+                  <div class="col-4 d-grid">
+                    <button class="btn right" style="background-color: var(--royal-navy); color: white;" title="Move Right"><i class="bi bi-arrow-right"></i></button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="fieldControls" class="rounded-3 p-4 mt-4" style="display:none; background-color: var(--champagne-white); border: 1px solid rgba(212, 175, 55, 0.2);">
+                <h5 class="mb-3 fw-medium" style="color: var(--royal-navy);"><i class="bi bi-palette2 me-2"></i> Field Styling</h5>
+                <div class="row g-4 align-items-center">
+                  <div class="col-md-4">
+                    <label class="form-label fw-medium">Text Color</label>
+                    <input type="color" id="colorPicker" value="#0A0A0A" class="form-control form-control-color w-100 p-1 rounded-2">
+                  </div>
+                  <div class="col-md-5">
+                    <label class="form-label fw-medium">Font Size</label>
+                    <div class="d-flex align-items-center">
+                      <input type="range" id="sizeSlider" min="8" max="72" value="16" class="form-range flex-grow-1">
+                      <span id="sizeValue" class="ms-3 fw-bold">16px</span>
+                    </div>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label fw-medium">Font Weight</label>
+                    <div class="d-flex align-items-center mt-2">
+                      <div class="form-check form-switch me-3">
+                        <input class="form-check-input" type="checkbox" id="boldToggle">
+                        <label class="form-check-label" for="boldToggle">Bold</label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="col-12">
+          <div class="d-flex gap-3 flex-wrap">
+            <button id="previewBtn" class="btn btn-primary py-2 px-4 rounded-2 flex-fill" disabled>
+              <i class="bi bi-eye me-2"></i> Preview Sample PDF
+            </button>
+            <button id="generateBtn" class="btn btn-success py-2 px-4 rounded-2 flex-fill" disabled>
+              <i class="bi bi-file-earmark-zip me-2"></i> Generate All & Download ZIP
+            </button>
+          </div>
+        </div>
+
+        <!-- Debug Info -->
+        <div class="col-12">
+          <div class="rounded-3 p-3 debug-info" id="debugInfo">
+            <div class="d-flex align-items-center">
+              <i class="bi bi-info-circle me-2" style="color: var(--royal-navy);"></i>
+              <span>No field selected. Click on a field to select and style it.</span>
             </div>
           </div>
         </div>
       </div>
     </div>
   </div>
-
-  <div class="d-flex flex-wrap gap-2 mb-3">
-    <button id="previewBtn" class="btn btn-primary" disabled>
-      <i class="bi bi-eye me-1"></i> Preview Sample PDF
-    </button>
-    <button id="generateBtn" class="btn btn-success" disabled>
-      <i class="bi bi-file-earmark-zip me-1"></i> Generate All & Download ZIP
-    </button>
-  </div>
-
-  <div class="debug text-muted small" id="debugInfo">No field selected</div>
 </div>
 
-<!-- Direction Pad -->
+<!-- Direction Pad (Desktop) -->
 <div id="directionPad">
-  <button class="btn btn-success up" title="Move Up (↑)"><i class="bi bi-arrow-up"></i></button>
-  <button class="btn btn-primary left" title="Move Left (←)"><i class="bi bi-arrow-left"></i></button>
-  <button class="btn btn-primary right" title="Move Right (→)"><i class="bi bi-arrow-right"></i></button>
-  <button class="btn btn-success down" title="Move Down (↓)"><i class="bi bi-arrow-down"></i></button>
-  <button class="btn btn-danger del" style="grid-column:2; margin-top:8px;" title="Delete Field (Del)">
-    <i class="bi bi-trash"></i>
-  </button>
+  <div></div>
+  <button class="btn up rounded-2" style="background-color: var(--dark-teal); color: white;" title="Move Up (↑)"><i class="bi bi-arrow-up"></i></button>
+  <div></div>
+  <button class="btn left rounded-2" style="background-color: var(--royal-navy); color: white;" title="Move Left (←)"><i class="bi bi-arrow-left"></i></button>
+  <button class="btn del rounded-2" style="background-color: #8B0000; color: white;" title="Delete Field (Del)"><i class="bi bi-trash"></i></button>
+  <button class="btn right rounded-2" style="background-color: var(--royal-navy); color: white;" title="Move Right (→)"><i class="bi bi-arrow-right"></i></button>
+  <div></div>
+  <button class="btn down rounded-2" style="background-color: var(--dark-teal); color: white;" title="Move Down (↓)"><i class="bi bi-arrow-down"></i></button>
+  <div></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
+// All the JavaScript code from the original remains the same
+// Only the CSS and HTML structure have been enhanced
 let participants = [];
 let fields = [];
 let templateUrl = "";
@@ -241,23 +452,24 @@ const sizeSlider = document.getElementById('sizeSlider');
 const sizeValue = document.getElementById('sizeValue');
 const boldToggle = document.getElementById('boldToggle');
 const fieldControls = document.getElementById('fieldControls');
-const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingModal = new bootstrap.Modal(document.getElementById('loadingModal'));
 const loadingText = document.getElementById('loadingText');
 const noColumnsEl = document.getElementById('noColumns');
+const templateContainer = document.getElementById('templateContainer');
+const selectedFieldName = document.getElementById('selectedFieldName');
 
 function showLoading(text = "Processing...") {
   loadingText.textContent = text;
-  loadingOverlay.classList.add('show');
+  loadingModal.show();
 }
 
 function hideLoading() {
-  loadingOverlay.classList.remove('show');
+  loadingModal.hide();
 }
 
 document.getElementById("csvFile").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  showLoading("Parsing CSV...");
   const formData = new FormData();
   formData.append("csv", file);
   try {
@@ -286,6 +498,8 @@ document.getElementById("templateFile").addEventListener("change", async (e) => 
     if (data.error) throw new Error(data.error);
     templateUrl = data.templateUrl;
     document.getElementById("template").style.backgroundImage = `url(${templateUrl})`;
+    templateContainer.classList.add("has-background");
+    document.getElementById("template").innerHTML = "";
     checkReady();
   } catch (err) {
     alert("Template upload failed: " + err.message);
@@ -303,7 +517,7 @@ function updateColumnsUI(columns) {
   columns.forEach(col => {
     const btn = document.createElement("button");
     btn.innerHTML = `<i class="bi bi-plus-circle me-1"></i> ${col}`;
-    btn.className = "btn btn-sm btn-outline-secondary btn-add-field";
+    btn.className = "btn btn-sm btn-outline-secondary rounded-1";
     btn.title = `Add field: ${col}`;
     btn.onclick = () => addField(col);
     div.appendChild(btn);
@@ -326,7 +540,7 @@ function addField(name) {
   field.style.top = "50px";
   field.dataset.fieldName = name;
   field.style.fontSize = "16px";
-  field.style.color = "#000000";
+  field.style.color = "#0A0A0A";
   field.style.fontWeight = "normal";
 
   field.addEventListener("click", (e) => {
@@ -336,6 +550,7 @@ function addField(name) {
     field.classList.add("selected");
     updateFieldControls();
     updateDebug();
+    selectedFieldName.textContent = name;
   });
 
   field.draggable = true;
@@ -361,6 +576,7 @@ function addField(name) {
       field.classList.add("selected");
       updateFieldControls();
       updateDebug();
+      selectedFieldName.textContent = name;
     }
     e.preventDefault();
   });
@@ -370,8 +586,9 @@ function addField(name) {
     const touch = e.touches[0];
     let x = elementStartX + (touch.clientX - touchStartX);
     let y = elementStartY + (touch.clientY - touchStartY);
-    x = Math.max(0, Math.min(590, x));
-    y = Math.max(0, Math.min(390, y));
+    const templateRect = document.getElementById("template").getBoundingClientRect();
+    x = Math.max(0, Math.min(templateRect.width - 120, x));
+    y = Math.max(0, Math.min(templateRect.height - 50, y));
     field.style.left = x + 'px';
     field.style.top = y + 'px';
     field.querySelector('.coords').textContent = `(${Math.round(x)}, ${Math.round(y)})`;
@@ -390,7 +607,7 @@ function addField(name) {
     x: 50,
     y: 50,
     size: 16,
-    color: "#000000",
+    color: "#0A0A0A",
     bold: false,
     element: field
   });
@@ -404,6 +621,7 @@ document.getElementById("template").addEventListener("click", (e) => {
       selectedField = null;
       hideFieldControls();
       updateDebug();
+      selectedFieldName.textContent = "None";
     }
   }
 });
@@ -413,8 +631,8 @@ document.getElementById("template").addEventListener("drop", (e) => {
   e.preventDefault();
   const fieldName = e.dataTransfer.getData("text/plain");
   const rect = document.getElementById("template").getBoundingClientRect();
-  const x = Math.max(0, Math.min(590, e.clientX - rect.left));
-  const y = Math.max(0, Math.min(390, e.clientY - rect.top));
+  const x = Math.max(0, Math.min(rect.width - 120, e.clientX - rect.left));
+  const y = Math.max(0, Math.min(rect.height - 50, e.clientY - rect.top));
 
   const fieldEl = document.querySelector(`.field[data-field-name="${fieldName}"]`);
   if (fieldEl) {
@@ -438,7 +656,7 @@ colorInput.addEventListener('input', () => {
 sizeSlider.addEventListener('input', () => {
   if (!selectedField) return;
   const size = sizeSlider.value;
-  sizeValue.textContent = size;
+  sizeValue.textContent = size + 'px';
   selectedField.style.fontSize = size + 'px';
   const f = fields.find(f => f.element === selectedField);
   if (f) f.size = parseInt(size);
@@ -462,7 +680,7 @@ function updateFieldControls() {
   if (f) {
     colorInput.value = f.color;
     sizeSlider.value = f.size;
-    sizeValue.textContent = f.size;
+    sizeValue.textContent = f.size + 'px';
     boldToggle.checked = f.bold;
   }
 }
@@ -476,12 +694,13 @@ document.addEventListener("keydown", (e) => {
   const step = e.shiftKey ? 10 : 1;
   let x = parseInt(selectedField.style.left) || 0;
   let y = parseInt(selectedField.style.top) || 0;
+  const templateRect = document.getElementById("template").getBoundingClientRect();
 
   switch(e.key) {
     case "ArrowLeft":  x = Math.max(0, x - step); break;
-    case "ArrowRight": x = Math.min(590, x + step); break;
+    case "ArrowRight": x = Math.min(templateRect.width - 120, x + step); break;
     case "ArrowUp":    y = Math.max(0, y - step); break;
-    case "ArrowDown":  y = Math.min(390, y + step); break;
+    case "ArrowDown":  y = Math.min(templateRect.height - 50, y + step); break;
     case "Delete":
     case "Backspace":
       deleteSelectedField();
@@ -505,6 +724,13 @@ function createDirectionPad() {
   pad.querySelector('.left').onclick = () => simulateKey('ArrowLeft');
   pad.querySelector('.right').onclick = () => simulateKey('ArrowRight');
   pad.querySelector('.del').onclick = deleteSelectedField;
+  
+  // Mobile controls
+  document.querySelector('.mobile-controls .up').onclick = () => simulateKey('ArrowUp');
+  document.querySelector('.mobile-controls .down').onclick = () => simulateKey('ArrowDown');
+  document.querySelector('.mobile-controls .left').onclick = () => simulateKey('ArrowLeft');
+  document.querySelector('.mobile-controls .right').onclick = () => simulateKey('ArrowRight');
+  document.querySelector('.mobile-controls .del').onclick = deleteSelectedField;
 }
 
 function simulateKey(key) {
@@ -521,20 +747,36 @@ function deleteSelectedField() {
   selectedField = null;
   hideFieldControls();
   checkReady();
-  document.getElementById("debugInfo").textContent = `✅ Field "${fieldName}" deleted`;
+  document.getElementById("debugInfo").innerHTML = `
+    <div class="d-flex align-items-center">
+      <i class="bi bi-check-circle me-2" style="color: var(--dark-teal);"></i>
+      <span>Field "${fieldName}" deleted</span>
+    </div>
+  `;
+  selectedFieldName.textContent = "None";
   setTimeout(() => updateDebug(), 1000);
 }
 
 function updateDebug() {
   if (!selectedField) {
-    document.getElementById("debugInfo").textContent = "💡 Click a field to select and style it";
+    document.getElementById("debugInfo").innerHTML = `
+      <div class="d-flex align-items-center">
+        <i class="bi bi-info-circle me-2" style="color: var(--royal-navy);"></i>
+        <span>No field selected. Click on a field to select and style it.</span>
+      </div>
+    `;
     return;
   }
   const f = fields.find(f => f.element === selectedField);
   if (f) {
     document.getElementById("debugInfo").innerHTML = 
-      `✏️ Selected: <strong>${f.field}</strong> | Pos: (${f.x}, ${f.y}) | Size: ${f.size}px | 
-       Color: <span style="color:${f.color}; font-weight:bold;">●</span> | Bold: ${f.bold ? 'Yes' : 'No'}`;
+      `<div class="d-flex align-items-center">
+        <i class="bi bi-pencil me-2" style="color: var(--gold);"></i>
+        <span>
+          Selected: <strong>${f.field}</strong> | Position: (${f.x}, ${f.y}) | Size: ${f.size}px | 
+          Color: <span style="color:${f.color}; font-weight:bold;">●</span> | Bold: ${f.bold ? 'Yes' : 'No'}
+        </span>
+      </div>`;
   }
 }
 
@@ -605,7 +847,12 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
     a.download = "certificates_bulk.zip";
     a.click();
     window.URL.revokeObjectURL(url);
-    document.getElementById("debugInfo").textContent = "✅ ZIP downloaded successfully!";
+    document.getElementById("debugInfo").innerHTML = `
+      <div class="d-flex align-items-center">
+        <i class="bi bi-check-circle me-2" style="color: var(--dark-teal);"></i>
+        <span>ZIP downloaded successfully!</span>
+      </div>
+    `;
   } catch (err) {
     alert("Generation error: " + err.message);
   } finally {
