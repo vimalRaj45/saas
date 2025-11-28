@@ -740,6 +740,7 @@ app.post('/preview-pdf', async (req, res) => {
 
 
 // --- Generate ZIP with all certificates ---
+// --- Generate ZIP with all certificates (improved) ---
 app.post('/generate', async (req, res) => {
   try {
     const { participants, templateUrl, fields } = req.body;
@@ -751,10 +752,10 @@ app.post('/generate', async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename=certificates.zip');
 
-    // Pipe the archive stream to response
+    // Pipe archive to response
     archive.pipe(res);
 
-    // Load template once (important for speed)
+    // Load template once for speed
     let imageBytes = null;
     if (templateUrl && templateUrl.startsWith('http')) {
       try {
@@ -764,32 +765,25 @@ app.post('/generate', async (req, res) => {
       }
     }
 
-    // Loop participants
-    for (const p of participants) {
+    // Load Unicode font once
+    const fontUrl = "https://github.com/googlefonts/noto-fonts/blob/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf?raw=true";
+    const fontBytes = await fetch(fontUrl).then(r => r.arrayBuffer());
 
+    for (const p of participants) {
       const pdfDoc = await PDFDocument.create();
+      pdfDoc.registerFontkit(fontkit);
+      const customFont = await pdfDoc.embedFont(fontBytes);
       const page = pdfDoc.addPage([600, 400]);
 
-      // Draw background template image
+      // Embed template image
       if (imageBytes) {
         try {
           let img;
           const lower = templateUrl.toLowerCase();
+          if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) img = await pdfDoc.embedJpg(imageBytes);
+          else if (lower.endsWith('.png')) img = await pdfDoc.embedPng(imageBytes);
 
-          if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-            img = await pdfDoc.embedJpg(imageBytes);
-          } else if (lower.endsWith('.png')) {
-            img = await pdfDoc.embedPng(imageBytes);
-          }
-
-          if (img) {
-            page.drawImage(img, {
-              x: 0,
-              y: 0,
-              width: 600,
-              height: 400
-            });
-          }
+          if (img) page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
         } catch (imgErr) {
           console.error("Image Embed Error:", imgErr);
         }
@@ -800,7 +794,6 @@ app.post('/generate', async (req, res) => {
         const value = (p[f.field] || "").toString().trim();
         if (!value) continue;
 
-        // Fix: hex color crash if '#'
         let hex = (f.color || "#000000").replace('#', '');
         if (hex.length !== 6) hex = "000000";
 
@@ -812,31 +805,26 @@ app.post('/generate', async (req, res) => {
           x: f.x,
           y: 400 - f.y - f.size,
           size: f.size,
+          font: customFont,
           color: rgb(r, g, b)
         });
       }
 
-      // Add to ZIP
+      // Add PDF to ZIP
       const pdfBytes = await pdfDoc.save();
-      const safeName = (p.name || p.Name || 'certificate')
-        .toString()
-        .replace(/[^a-z0-9_-]/gi, '_');
-
+      const safeName = (p.name || p.Name || 'certificate').toString().replace(/[^a-z0-9_-]/gi, '_');
       archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
     }
 
-    // Finalize archive (stream ends)
+    // Finalize archive
     archive.finalize();
 
   } catch (err) {
     console.error("ZIP Generation Error:", err);
-
-    // Prevent double headers
-    if (!res.headersSent) {
-      return res.status(500).json({ error: 'Generation failed' });
-    }
+    if (!res.headersSent) res.status(500).json({ error: 'Generation failed' });
   }
 });
+
 
 
 app.listen(port, () => {
