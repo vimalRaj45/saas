@@ -603,6 +603,22 @@
         min-height: 250px;
       }
     }
+
+    /* Ensure smooth progress bar animations */
+#swal-bar {
+  transition: width 0.3s ease !important;
+}
+
+/* Prevent modal content from being hidden */
+.swal2-popup {
+  overflow: visible !important;
+}
+
+/* Ensure log container scrolls properly */
+#swal-log {
+  overflow-y: auto !important;
+  max-height: 120px !important;
+}
   </style>
 </head>
 <body>
@@ -1607,6 +1623,11 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
   <script>
+
+      async function stopNow() {
+  await fetch("/stop", { method: "POST" });
+  Swal.fire("Stopped", "Generation has been stopped.", "info");
+}
     // Section Navigation
     function showSection(sectionId) {
       // Hide all sections
@@ -1636,6 +1657,10 @@
       // Scroll to top
       window.scrollTo(0, 0);
     }
+
+
+
+    
 
     // Certificate Generator JavaScript
     let participants = [];
@@ -1692,12 +1717,19 @@ evtSource.onmessage = function (event) {
     document.getElementById("status").innerHTML = "Connected to progress stream...";
   }
 
-  if (data.percent !== undefined) {
-    document.getElementById("progressBar").style.width = data.percent + "%";
-    document.getElementById("progressBar").innerText = data.percent + "%";
-
-    document.getElementById("count").innerHTML = `${data.current}/${data.total}`;
+ if (data.percent !== undefined) {
+  const progressBar = document.getElementById("progressBar");
+  if (progressBar) {
+    progressBar.style.width = data.percent + "%";
+    progressBar.innerText = data.percent + "%";
   }
+
+  const countEl = document.getElementById("count");
+  if (countEl) {
+    countEl.innerHTML = `${data.current}/${data.total}`;
+  }
+}
+
 
   if (data.name) {
     document.getElementById("currentName").innerHTML = data.name;
@@ -2056,93 +2088,189 @@ evtSource.onmessage = function (event) {
       }
     });
 
-   document.getElementById("generateBtn").addEventListener("click", async () => {
+  document.getElementById("generateBtn").addEventListener("click", async () => {
+  // Close any existing EventSource connections
+  if (window.currentEventSource) {
+    window.currentEventSource.close();
+    window.currentEventSource = null;
+  }
 
-  // --- SWEETALERT TRANSPARENT PROGRESS WINDOW ---
-  Swal.fire({
-    title: "Generating Certificates…",
-    html: `
-      <div style="text-align:left;font-size:15px;">
-        <b>Status:</b> <span id="swal-status">Connecting to server…</span><br>
-        <b>Backend Task:</b> <span id="swal-task">-</span><br>
-        <b>Current Name:</b> <span id="swal-current-name">-</span><br>
-        <b>Progress:</b> <span id="swal-progress-text">0%</span><br>
-        <b>Processed:</b> <span id="swal-count">0/0</span><br>
-        <b>ETA:</b> <span id="swal-eta">Calculating…</span>
+  // Reset progress UI
+  const progressHtml = `
+    <div style="text-align:left;font-size:15px;">
+      <b>Status:</b> <span id="swal-status">Starting…</span><br>
+      <b>Task:</b> <span id="swal-task">-</span><br>
+      <b>Current Name:</b> <span id="swal-current-name">-</span><br>
+      <b>Progress:</b> <span id="swal-progress-text">0%</span><br>
+      <b>Processed:</b> <span id="swal-count">0/0</span><br>
+      <b>ETA:</b> <span id="swal-eta">Calculating…</span>
+      <button style="float:right;margin-top:-4px;padding:2px 6px;font-size:12px;
+             background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;"
+             onclick="stopNow()">Stop</button>
 
-        <div style="width:100%;height:14px;background:#eee;border-radius:6px;margin-top:12px;">
-          <div id="swal-bar"
-               style="width:0%;height:100%;background:#28a745;border-radius:6px;transition:0.25s ease;"></div>
-        </div>
-
-        <br>
-        <div id="swal-log"
-             style="height:120px;overflow-y:auto;background:#fafafa;padding:8px;border-radius:6px;
-             border:1px solid #ddd;font-size:13px;">
-          <b>Live Backend Logs:</b><br>
-          <span id="swal-log-text" style="color:#444;">Waiting for server…</span>
-        </div>
+      <div style="width:100%;height:14px;background:#eee;border-radius:6px;margin-top:12px;">
+        <div id="swal-bar"
+             style="width:0%;height:100%;background:#28a745;border-radius:6px;transition:0.25s ease;"></div>
       </div>
-    `,
+
+      <br>
+      <div id="swal-log"
+           style="height:120px;overflow-y:auto;background:#fafafa;padding:8px;border-radius:6px;
+           border:1px solid #ddd;font-size:13px;">
+        <b>Live Backend Logs:</b><br>
+        <span id="swal-log-text" style="color:#444;">Connecting to server…</span>
+      </div>
+    </div>
+  `;
+
+  // Show progress modal
+  const progressModal = Swal.fire({
+    title: "Generating Certificates…",
+    html: progressHtml,
     allowOutsideClick: false,
-    showConfirmButton: false
+    showConfirmButton: false,
+    width: '600px',
+    didOpen: () => {
+      // Start progress tracking AFTER modal is open
+      setupProgressTracking();
+    }
   });
 
-  // ---------- CONNECT TO SSE ----------
-  const evtSource = new EventSource("/progress");
+  function setupProgressTracking() {
+    // Initialize progress tracking
+    let logBuffer = [];
+    let lastUpdateTime = 0;
+    const UPDATE_INTERVAL = 100; // Update UI every 100ms max
 
-  // 🔥 ULTRA-SCALE LOG BUFFER
-  let logBuffer = [];
-  let logTimer = null;
+    // Create EventSource connection with cache prevention
+    const eventSourceUrl = '/progress?' + new Date().getTime(); // Prevent caching
+    window.currentEventSource = new EventSource(eventSourceUrl);
+    
+    window.currentEventSource.onopen = function() {
+      console.log("✅ SSE Connection opened");
+      updateUI("status", "Connected to server");
+      addToLog("✅ Connected to progress stream");
+    };
 
-  evtSource.onmessage = (event) => {
-    const data = JSON.parse(event.data);
+    window.currentEventSource.onmessage = function(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log("📊 Progress Update:", data);
 
-    // ----------- BASIC LIVE UI UPDATES -----------
-    if (data.stage) document.getElementById("swal-status").innerText = data.stage;
-    if (data.task) document.getElementById("swal-task").innerText = data.task;
-    if (data.name) document.getElementById("swal-current-name").innerText = data.name;
+        // Throttle UI updates to prevent freezing
+        const now = Date.now();
+        if (now - lastUpdateTime > UPDATE_INTERVAL) {
+          updateAllUI(data);
+          lastUpdateTime = now;
+        } else {
+          // Schedule update for later
+          setTimeout(() => updateAllUI(data), UPDATE_INTERVAL);
+        }
 
-    if (data.percent !== undefined) {
-      document.getElementById("swal-progress-text").innerText = data.percent + "%";
-      document.getElementById("swal-bar").style.width = data.percent + "%";
-    }
+        // Close connection when done
+        if (data.stage === "completed" || data.stage === "error" || data.stage === "stopped") {
+          setTimeout(() => {
+            if (window.currentEventSource) {
+              window.currentEventSource.close();
+              window.currentEventSource = null;
+            }
+          }, 1000);
+        }
 
-    if (data.current !== undefined) {
-      document.getElementById("swal-count").innerText = `${data.current}/${data.total}`;
-    }
+      } catch (parseError) {
+        console.error("❌ Error parsing SSE data:", parseError);
+        addToLog("❌ Error parsing server data");
+      }
+    };
 
-    if (data.eta) document.getElementById("swal-eta").innerText = data.eta;
+    window.currentEventSource.onerror = function(error) {
+      console.error("❌ SSE Error:", error);
+      updateUI("status", "Connection error");
+      addToLog("⚠️ Connection issue with server");
+      
+      // Try to reconnect after 2 seconds
+      setTimeout(() => {
+        if (window.currentEventSource && window.currentEventSource.readyState === EventSource.CLOSED) {
+          console.log("🔄 Attempting to reconnect...");
+          window.currentEventSource.close();
+          setupProgressTracking();
+        }
+      }, 2000);
+    };
 
-    // -------------------------------------------------------
-    //  🔥 REAL ULTRA-SCALE LOG HANDLER (10K+ safe)
-    // -------------------------------------------------------
-    if (data.log || data.message) {
-      const logBox = document.getElementById("swal-log-text");
-      logBuffer.push(data.log || data.message);
+    // Helper function to update all UI elements
+    function updateAllUI(data) {
+      // Update status
+      if (data.stage) {
+        updateUI("status", data.stage);
+      }
+      
+      // Update task
+      if (data.task) {
+        updateUI("task", data.task);
+      }
+      
+      // Update current name
+      if (data.name) {
+        updateUI("current-name", data.name);
+      }
+      
+      // Update progress percentage
+      if (data.percent !== undefined) {
+        updateUI("progress-text", data.percent + "%");
+        document.getElementById("swal-bar").style.width = data.percent + "%";
+      }
+      
+      // Update counts
+      if (data.current !== undefined && data.total !== undefined) {
+        updateUI("count", `${data.current}/${data.total}`);
+      }
+      
+      // Update ETA
+      if (data.eta) {
+        updateUI("eta", data.eta);
+      }
 
-      // Only update DOM once every 80ms (prevents freezing)
-      if (!logTimer) {
-        logTimer = setTimeout(() => {
-          if (logBuffer.length > 200) logBuffer = logBuffer.slice(-200);
-          logBox.innerHTML = logBuffer.map(l => `<br>${l}`).join("");
-          logBox.parentElement.scrollTop = logBox.parentElement.scrollHeight;
-          logTimer = null;
-        }, 80);
+      // Handle logs
+      if (data.log) {
+        addToLog(data.log);
       }
     }
 
-    // ---------- CLOSE WHEN DONE ----------
-    if (data.stage === "completed") {
-      evtSource.close();
-      Swal.update({
-        title: "Finalizing ZIP…",
-      });
+    // Helper function to update UI elements
+    function updateUI(elementId, value) {
+      const element = document.getElementById(`swal-${elementId}`);
+      if (element) {
+        element.textContent = value;
+      }
     }
-  };
+
+    // Helper function to add logs
+    function addToLog(message) {
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = `[${timestamp}] ${message}`;
+      
+      logBuffer.push(logEntry);
+      
+      // Keep only last 30 entries
+      if (logBuffer.length > 30) {
+        logBuffer = logBuffer.slice(-30);
+      }
+      
+      const logBox = document.getElementById("swal-log-text");
+      if (logBox) {
+        logBox.innerHTML = logBuffer.map(entry => `${entry}<br>`).join("");
+        // Auto-scroll to bottom
+        const logContainer = document.getElementById("swal-log");
+        if (logContainer) {
+          logContainer.scrollTop = logContainer.scrollHeight;
+        }
+      }
+    }
+  }
 
   try {
-    // ---------- SEND GENERATE REQUEST ----------
+    // Send generate request
     const payload = {
       participants,
       templateUrl,
@@ -2156,23 +2284,54 @@ evtSource.onmessage = function (event) {
       }))
     };
 
+    console.log("🚀 Sending generation request for", participants.length, "participants");
+
     const res = await fetch("/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
-    if (!res.ok) throw new Error("Generation failed");
+    // Check if generation was stopped
+    if (res.headers.get("X-Generation-Stopped") === "1") {
+      if (window.currentEventSource) {
+        window.currentEventSource.close();
+        window.currentEventSource = null;
+      }
+      
+      Swal.fire({
+        icon: "info",
+        title: "Stopped!",
+        text: "Generation was stopped by the user.",
+        confirmButtonColor: "#dc3545"
+      });
+      return;
+    }
 
-    // ---------- DOWNLOAD ZIP ----------
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Generation failed: ${errorText}`);
+    }
+
+    // Download ZIP
     const blob = await res.blob();
+    
+    // Close EventSource before download
+    if (window.currentEventSource) {
+      window.currentEventSource.close();
+      window.currentEventSource = null;
+    }
+
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = "certificates_bulk.zip";
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
 
+    // Show completion message
     Swal.fire({
       icon: "success",
       title: "Completed!",
@@ -2181,6 +2340,14 @@ evtSource.onmessage = function (event) {
     });
 
   } catch (err) {
+    console.error("❌ Generation error:", err);
+    
+    // Close EventSource on error
+    if (window.currentEventSource) {
+      window.currentEventSource.close();
+      window.currentEventSource = null;
+    }
+    
     Swal.fire({
       icon: "error",
       title: "Error",
