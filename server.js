@@ -242,7 +242,8 @@ app.post('/preview-pdf', async (req, res) => {
 
     // -------------------------------
     console.log("➡ Step 7: Saving PDF...");
-    const pdfBytes = await pdfDoc.save();
+    // ✅ Fixed
+    let pdfBytes = await pdfDoc.save();
     console.log("   ✔ PDF saved successfully");
 
     console.log("➡ Step 8: Sending PDF as response...");
@@ -494,8 +495,9 @@ async function generateHandler(req, key, zipPath) {
         // SSE progress
         sendProgress(key, { stage: "processing", task: "Generating certificates", current: processedCount, total, percent, name: p.name || `Participant ${start + i + 1}` });
 
-        // Free memory
-        pdfDoc = null;
+        // Free memory - no need to manually set to null, let GC handle it
+        // pdfDoc goes out of scope automatically at the end of each iteration
+
       } catch (err) {
         console.error(`Error processing participant ${start + i}:`, err);
       }
@@ -543,7 +545,6 @@ async function generateHandler(req, key, zipPath) {
   }
 }
 
-
 // Add cleanup endpoint
 app.post("/cleanup", (req, res) => {
   const { key } = req.body;
@@ -561,4 +562,3 @@ app.post("/cleanup", (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
-
