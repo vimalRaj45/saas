@@ -1624,10 +1624,7 @@
 
   <script>
 
-      async function stopNow() {
-  await fetch("/stop", { method: "POST" });
-  Swal.fire("Stopped", "Generation has been stopped.", "info");
-}
+   
     // Section Navigation
     function showSection(sectionId) {
       // Hide all sections
@@ -2088,7 +2085,9 @@ evtSource.onmessage = function (event) {
       }
     });
 
-  document.getElementById("generateBtn").addEventListener("click", async () => {
+  // Replace your existing generate button event listener with this:
+
+document.getElementById("generateBtn").addEventListener("click", async () => {
   // Close any existing EventSource connections
   if (window.currentEventSource) {
     window.currentEventSource.close();
@@ -2156,6 +2155,31 @@ evtSource.onmessage = function (event) {
       try {
         const data = JSON.parse(event.data);
         console.log("📊 Progress Update:", data);
+
+        // Handle queue status
+        if (data.stage === "queued") {
+          updateUI("status", `Queued - Position ${data.position || 1}`);
+          updateUI("task", `Waiting in queue - ${data.waitTime || 'Calculating...'}`);
+          updateUI("eta", data.waitTime || 'Calculating...');
+          addToLog(data.log || `Your request is #${data.position || 1} in queue`);
+          
+          // Update progress bar for queue position visualization
+          const progressBar = document.getElementById("swal-bar");
+          if (progressBar) {
+            progressBar.style.background = "#ffc107"; // Yellow for queue
+            progressBar.style.width = "100%";
+          }
+          
+          return; // Don't process further updates while in queue
+        }
+
+        // Reset progress bar color when starting actual generation
+        if (data.stage === "started" || data.stage === "processing") {
+          const progressBar = document.getElementById("swal-bar");
+          if (progressBar) {
+            progressBar.style.background = "#28a745"; // Green for generation
+          }
+        }
 
         // Throttle UI updates to prevent freezing
         const now = Date.now();
@@ -2308,6 +2332,23 @@ evtSource.onmessage = function (event) {
       return;
     }
 
+    // Check if we got a queue response (409 status)
+    if (res.status === 409) {
+      const errorData = await res.json();
+      if (window.currentEventSource) {
+        window.currentEventSource.close();
+        window.currentEventSource = null;
+      }
+      
+      Swal.fire({
+        icon: "info",
+        title: "Request Cancelled",
+        text: errorData.message || "Your request was cancelled because the current generation was stopped.",
+        confirmButtonColor: "#dc3545"
+      });
+      return;
+    }
+
     if (!res.ok) {
       const errorText = await res.text();
       throw new Error(`Generation failed: ${errorText}`);
@@ -2343,7 +2384,7 @@ evtSource.onmessage = function (event) {
     console.error("❌ Generation error:", err);
     
     // Close EventSource on error
-    if (window.currentEventSource) {
+    if (window.currentSource) {
       window.currentEventSource.close();
       window.currentEventSource = null;
     }
@@ -2356,6 +2397,36 @@ evtSource.onmessage = function (event) {
   }
 });
 
+// Also add this helper function for the stop button
+async function stopNow() {
+  try {
+    const res = await fetch("/stop-generate", { method: "POST" });
+    const data = await res.json();
+    
+    if (data.success) {
+      // Update UI to show stopped status
+      const statusEl = document.getElementById("swal-status");
+      const logEl = document.getElementById("swal-log-text");
+      
+      if (statusEl) statusEl.textContent = "Stopped by user";
+      if (logEl) logEl.innerHTML += "<br>[System] Generation stopped by user";
+      
+      Swal.fire({
+        icon: "info",
+        title: "Stopped!",
+        text: "Generation has been stopped.",
+        confirmButtonColor: "#dc3545"
+      });
+    }
+  } catch (error) {
+    console.error("Error stopping generation:", error);
+    Swal.fire({
+      icon: "error",
+      title: "Error",
+      text: "Failed to stop generation"
+    });
+  }
+}
 
     // Initialize the app
     window.addEventListener("load", () => {
@@ -2691,5 +2762,4 @@ document.addEventListener('keydown',(e)=>{
 </script>
 </body>
 </html>
-
 
