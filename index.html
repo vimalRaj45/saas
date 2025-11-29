@@ -2195,12 +2195,35 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
       if (data.eta) document.getElementById("swal-eta").textContent = data.eta;
       if (data.log) addToLog(data.log);
 
-      // Completed
+      // Handle download URL when completed
       if (data.stage === "completed") {
         window.generationCompleted = true;
         if (window.currentEventSource) {
           window.currentEventSource.close();
           window.currentEventSource = null;
+        }
+        
+        // Use the download URL provided by backend
+        if (data.downloadUrl) {
+          addToLog(`✅ Generation completed! Starting download...`);
+          
+          // Trigger download automatically
+          setTimeout(() => {
+            const downloadUrl = data.downloadUrl;
+            const a = document.createElement("a");
+            a.href = downloadUrl;
+            a.download = `certificates_${genKey}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            Swal.fire({
+              icon: "success",
+              title: "Completed!",
+              text: "Certificates downloaded successfully!",
+              confirmButtonColor: "#28a745"
+            });
+          }, 1000);
         }
       }
 
@@ -2211,6 +2234,26 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
           window.currentEventSource.close();
           window.currentEventSource = null;
         }
+        Swal.fire({
+          icon: "error",
+          title: "Generation Error",
+          text: "Failed to generate certificates. Please try again."
+        });
+      }
+
+      // Handle cancelled stage
+      if (data.stage === "cancelled") {
+        addToLog("⏹️ Generation cancelled by user");
+        if (window.currentEventSource) {
+          window.currentEventSource.close();
+          window.currentEventSource = null;
+        }
+        Swal.fire({
+          icon: "info",
+          title: "Cancelled",
+          text: "Certificate generation was cancelled.",
+          confirmButtonColor: "#6c757d"
+        });
       }
     };
 
@@ -2222,83 +2265,63 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
       }
     };
 
-    // Wait for completion
-    await new Promise((resolve) => {
+    // Fallback: Wait for completion with timeout
+    await new Promise((resolve, reject) => {
       const checkInterval = setInterval(() => {
         if (window.generationCompleted) {
           clearInterval(checkInterval);
           resolve();
         }
       }, 500);
-    });
-
-    // Fetch ZIP after completion
-    const zipRes = await fetch(`/download?key=${genKey}`);
-    if (!zipRes.ok) throw new Error("Failed to download ZIP");
-    const zipBlob = await zipRes.blob();
-    const url = window.URL.createObjectURL(zipBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `certificates_${genKey}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-
-    Swal.fire({
-      icon: "success",
-      title: "Completed!",
-      text: "Certificates downloaded successfully!",
-      confirmButtonColor: "#28a745"
+      
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        if (!window.generationCompleted) {
+          reject(new Error("Generation timeout after 5 minutes"));
+        }
+      }, 300000);
     });
 
   } catch (err) {
     console.error("❌ Generation error:", err);
+    
+    // Close SSE connection if still open
+    if (window.currentEventSource) {
+      window.currentEventSource.close();
+      window.currentEventSource = null;
+    }
+    
     Swal.fire({
       icon: "error",
       title: "Error",
-      text: err.message
+      text: err.message,
+      footer: err.message.includes("timeout") 
+        ? "The generation is taking longer than expected. Please try again with fewer certificates." 
+        : ""
     });
   }
 });
 
 // Stop button handler
 async function stopNow() {
-  const key = localStorage.getItem("GEN_KEY");
-  if (!key) return;
-  try {
-    const res = await fetch(`/stop?key=${key}`, { method: "POST" });
-    const data = await res.json();
-    if (data.success) {
-      addToLog("[System] Generation stopped by user");
-      document.getElementById("swal-status").textContent = "Stopped by user";
-      if (window.currentEventSource) {
-        window.currentEventSource.close();
-        window.currentEventSource = null;
-      }
-      window.generationCompleted = true;
-      Swal.fire({
-        icon: "info",
-        title: "Stopped!",
-        text: "Generation has been stopped.",
-        confirmButtonColor: "#dc3545"
-      });
-    }
-  } catch (err) {
-    console.error("Error stopping generation:", err);
-    Swal.fire({
-      icon: "error",
-      title: "Error",
-      text: "Failed to stop generation"
-    });
-  }
-}
-
-// Also add this helper function for the stop button
-async function stopNow() {
   try {
     const key = localStorage.getItem("GEN_KEY");
-    const res = await fetch(`/stop?key=${key}`, { method: "POST" });
+    if (!key) {
+      Swal.fire({
+        icon: "warning",
+        title: "No Active Generation",
+        text: "No generation process is currently running."
+      });
+      return;
+    }
+
+    const res = await fetch("/stop-generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key })
+    });
+    
     const data = await res.json();
     
     if (data.success) {
@@ -2306,22 +2329,49 @@ async function stopNow() {
       const statusEl = document.getElementById("swal-status");
       const logEl = document.getElementById("swal-log-text");
       
-      if (statusEl) statusEl.textContent = "Stopped by user";
-      if (logEl) logEl.innerHTML += "<br>[System] Generation stopped by user";
+      if (statusEl) statusEl.textContent = "Stopping...";
+      if (logEl) {
+        logEl.innerHTML += "<br>[System] Stopping generation...";
+        const logContainer = document.getElementById("swal-log");
+        if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+      }
+      
+      // Close SSE connection
+      if (window.currentEventSource) {
+        window.currentEventSource.close();
+        window.currentEventSource = null;
+      }
       
       Swal.fire({
         icon: "info",
         title: "Stopped!",
-        text: "Generation has been stopped.",
+        text: "Generation process has been stopped.",
         confirmButtonColor: "#dc3545"
       });
+    } else {
+      throw new Error(data.error || "Failed to stop generation");
     }
   } catch (error) {
     console.error("Error stopping generation:", error);
     Swal.fire({
       icon: "error",
       title: "Error",
-      text: "Failed to stop generation"
+      text: "Failed to stop generation: " + error.message
+    });
+  }
+}
+
+// Manual download function as fallback
+function manualDownload() {
+  const key = localStorage.getItem("GEN_KEY");
+  if (key) {
+    const downloadUrl = `/download?key=${key}`;
+    window.open(downloadUrl, '_blank');
+  } else {
+    Swal.fire({
+      icon: "warning",
+      title: "No Download Available",
+      text: "No generation key found. Please generate certificates first."
     });
   }
 }
@@ -2660,4 +2710,3 @@ document.addEventListener('keydown',(e)=>{
 </script>
 </body>
 </html>
-
