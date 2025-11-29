@@ -8,7 +8,7 @@ import http from 'http';
 import dotenv from 'dotenv';
 import fetch from "node-fetch";
 import path from 'path';
-import { Readable } from 'stream';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import fontkit from "@pdf-lib/fontkit";
 
@@ -261,16 +261,20 @@ app.post('/preview-pdf', async (req, res) => {
   }
 });
 
+// --- SSE clients ---
 let clients = []; // connected SSE clients
 
 app.get("/progress", (req, res) => {
+  const key = req.query.key;
+  if (!key) return res.status(400).end("Missing key");
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  const clientId = Date.now();
-  const newClient = { id: clientId, res };
+  const clientId = Date.now() + Math.random();
+  const newClient = { id: clientId, key, res };
   clients.push(newClient);
 
   req.on("close", () => {
@@ -278,284 +282,169 @@ app.get("/progress", (req, res) => {
   });
 });
 
-// Function to send progress to all SSE clients
-function sendProgress(data) {
-  console.log("📊 Sending progress:", data); // Debug log
+function sendProgress(key, data) {
   clients.forEach(client => {
-    try {
-      client.res.write(`data: ${JSON.stringify(data)}\n\n`);
-    } catch (error) {
-      console.error("Error sending progress to client:", error);
-      // Remove disconnected clients
-      clients = clients.filter(c => c !== client);
+    if (client.key === key) {
+      try {
+        client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        clients = clients.filter(c => c.id !== client.id);
+      }
     }
   });
 }
 
-// ====== GENERATION QUEUE SYSTEM ======
+// --- Queue system ---
 let isGenerating = false;
 let queue = [];
 let currentGenerationStartTime = null;
 let currentGenerationTotal = 0;
+let stopRequested = false;
+
+// Temporary storage: key → ZIP path
+let zipStore = {};
 
 // ----------------------
-// 1️⃣ Stop Generation
+// Stop Generation
 // ----------------------
-let stopRequested = false; // global flag
-
 app.post("/stop-generate", (req, res) => {
-  stopRequested = true; // set stop flag
-  
-  // Clear queue if requested
-  if (queue.length > 0) {
-    queue.forEach(queued => {
-      queued.res.status(409).json({ 
-        error: "Generation cancelled by user",
-        message: "Your request was cancelled because the current generation was stopped"
-      });
+  stopRequested = true;
+  queue.forEach(q => {
+    q.res?.status(409).json({
+      error: "Generation cancelled by user",
+      message: "Your request was cancelled because the current generation was stopped"
     });
-    queue = [];
-  }
-  
-  sendProgress({
-    stage: "stopped",
-    task: "⛔ Stopped by user"
   });
-  console.log("⛔ Generation stop requested by user");
-  return res.json({ success: true, message: "Generation stopped" });
+  queue = [];
+  sendProgress(null, { stage: "stopped", task: "⛔ Stopped by user" });
+  return res.json({ success: true });
 });
 
-// Calculate estimated wait time
-function calculateWaitTime() {
-  if (!currentGenerationStartTime || !currentGenerationTotal) return "Unknown";
-  
-  const elapsed = (Date.now() - currentGenerationStartTime) / 1000;
-  const progressPercent = Math.min(95, Math.max(5, (elapsed / 30) * 100)); // Estimate based on average time
-  const remainingTime = (elapsed / progressPercent) * (100 - progressPercent);
-  
-  return `${Math.ceil(remainingTime / 60)} minutes ${Math.ceil(remainingTime % 60)} seconds`;
-}
-
-// 2️⃣ Generate Certificates (Main endpoint with queue)
+// ----------------------
+// Generate endpoint
+// ----------------------
 app.post("/generate", async (req, res) => {
-  // If already generating, add to queue
+  const generationKey = "gen_" + Date.now() + "_" + Math.random().toString(36).substring(2,10);
+  req.generationKey = generationKey;
+
+  console.log("🔑 New generation key:", generationKey);
+
+  // Return key immediately for progress tracking
+  res.json({ success: true, key: generationKey, message: "Tracking initiated." });
+
+  // Add to queue if already generating
   if (isGenerating) {
-    const position = queue.length + 1;
-    const waitTime = calculateWaitTime();
-    
-    queue.push({ req, res, timestamp: Date.now() });
-    
-    sendProgress({
-      stage: "queued",
-      task: "Waiting in queue...",
-      position: position,
-      waitTime: waitTime,
-      log: `Your request is #${position} in queue. Estimated wait time: ${waitTime}`
-    });
-    
-    console.log(`📋 Request added to queue. Position: ${position}, Queue size: ${queue.length}`);
+    queue.push({ req, key: generationKey, timestamp: Date.now() });
+    sendProgress(generationKey, { stage: "queued", task: "Waiting in queue..." });
     return;
   }
 
-  // Start generation immediately
+  // Start immediately
   isGenerating = true;
   currentGenerationStartTime = Date.now();
   currentGenerationTotal = req.body.participants?.length || 0;
-  
-  await generateHandler(req, res);
+
+  // Generate ZIP in background and store path
+  const zipPath = path.join(__dirname, `temp_${generationKey}.zip`);
+  await generateHandler(req, generationKey, zipPath);
+
+  // Save ZIP path for download
+  zipStore[generationKey] = zipPath;
 });
 
-// Main generation logic
-async function generateHandler(req, res) {
-  stopRequested = false; // reset at start
-  console.log("⚡ Generation started");
+// ----------------------
+// Download endpoint
+// ----------------------
+app.get("/download", (req, res) => {
+  const key = req.query.key;
+  if (!key || !zipStore[key]) return res.status(404).send("ZIP not found");
 
-  let responseEnded = false;
+  const filePath = zipStore[key];
+  res.download(filePath, `certificates_${key}.zip`, err => {
+    if (!err) fs.unlink(filePath, () => delete zipStore[key]); // cleanup
+  });
+});
+
+// ----------------------
+// Main generation handler
+// ----------------------
+async function generateHandler(req, key, zipPath) {
+  stopRequested = false;
+  const { participants, templateUrl, fields } = req.body;
+  const total = participants?.length || 0;
   let processedCount = 0;
-  const startTime = Date.now(); // for ETA calculation
-  const total = req.body.participants?.length || 0;
 
-  const endResponse = (message = "Generation stopped") => {
-    if (responseEnded) return;
-    responseEnded = true;
+  sendProgress(key, { stage: "started", task: "Generating certificates", current: 0, total, percent: 0 });
 
-    sendProgress({
-      stage: stopRequested ? "stopped" : "completed",
-      task: message,
-      current: processedCount,
-      total
-    });
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  const output = fs.createWriteStream(zipPath);
+  archive.pipe(output);
 
-    if (!res.writableEnded) res.end();
-  };
+  // Load template
+  let templateBuffer = null;
+  if (templateUrl) {
+    try {
+      const response = await fetch(templateUrl);
+      templateBuffer = Buffer.from(await response.arrayBuffer());
+    } catch {}
+  }
 
-  try {
-    const { participants, templateUrl, fields } = req.body;
+  // Load font
+  const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+  const fontBytes = Buffer.from(await (await fetch(fontUrl)).arrayBuffer());
 
-    if (!participants || total === 0) {
-      isGenerating = false;
-      currentGenerationStartTime = null;
-      currentGenerationTotal = 0;
-      return res.status(400).json({ error: "No participants" });
-    }
+  // Loop participants
+  for (let i=0; i<total; i++) {
+    if (stopRequested) break;
+    const p = participants[i];
 
-    // Send initial progress
-    sendProgress({
-      stage: "started",
-      task: "Starting certificate generation",
-      current: 0,
-      total,
-      percent: 0,
-      log: `Starting generation of ${total} certificates...`
-    });
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
+    const customFont = await pdfDoc.embedFont(fontBytes);
+    const page = pdfDoc.addPage([600,400]);
 
-    if (stopRequested) {
-      isGenerating = false;
-      currentGenerationStartTime = null;
-      currentGenerationTotal = 0;
-      return endResponse("Stopped before starting ZIP");
-    }
-
-    // ---- STREAM ZIP ----
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", "attachment; filename=certificates.zip");
-    const archive = archiver("zip", { zlib: { level: 9 } });
-
-    archive.on("error", (err) => {
-      console.error("Archiver error:", err);
-      sendProgress({ stage: "error", task: "ZIP creation failed", error: err.message });
-      if (!responseEnded) res.status(500).end();
-    });
-
-    archive.pipe(res);
-
-    // ---- Load Template Once ----
-    let templateBuffer = null;
-    if (templateUrl) {
+    if (templateBuffer) {
       try {
-        sendProgress({ stage: "processing", task: "Loading template image", log: "Downloading template from Cloudinary..." });
-        const response = await fetch(templateUrl);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        templateBuffer = Buffer.from(await response.arrayBuffer());
-        sendProgress({ stage: "processing", task: "Template loaded", log: "✅ Template image loaded successfully" });
-      } catch (err) {
-        console.warn("⚠️ Template load failed:", err.message);
-        sendProgress({ stage: "processing", task: "Template load warning", log: `⚠️ Template loading failed: ${err.message}` });
-      }
+        const img = templateUrl.toLowerCase().endsWith(".png")
+          ? await pdfDoc.embedPng(templateBuffer)
+          : await pdfDoc.embedJpg(templateBuffer);
+        page.drawImage(img, { x:0, y:0, width:600, height:400 });
+      } catch {}
     }
 
-    // ---- Load Font Once ----
-    sendProgress({ stage: "processing", task: "Loading fonts", log: "Downloading Unicode font..." });
-    const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-    const fontBytes = Buffer.from(await (await fetch(fontUrl)).arrayBuffer());
-    sendProgress({ stage: "processing", task: "Fonts loaded", log: "✅ Unicode font loaded successfully" });
-
-    // ---- MAIN LOOP ----
-    sendProgress({ stage: "processing", task: "Generating certificates", log: `Starting PDF generation for ${total} participants...` });
-
-    for (let i = 0; i < total; i++) {
-      if (stopRequested) {
-        console.log("⛔ STOP REQUESTED — Aborting generation...");
-        archive.abort();
-        isGenerating = false;
-        currentGenerationStartTime = null;
-        currentGenerationTotal = 0;
-        return endResponse("User stopped generation");
-      }
-
-      const p = participants[i];
-
-      // --- Create PDF ---
-      const pdfDoc = await PDFDocument.create();
-      pdfDoc.registerFontkit(fontkit);
-      const customFont = await pdfDoc.embedFont(fontBytes);
-      const page = pdfDoc.addPage([600, 400]);
-
-      // --- Embed template ---
-      if (templateBuffer) {
-        try {
-          const lower = templateUrl.toLowerCase();
-          const img = lower.endsWith(".jpg") || lower.endsWith(".jpeg")
-            ? await pdfDoc.embedJpg(templateBuffer)
-            : await pdfDoc.embedPng(templateBuffer);
-          page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
-        } catch (imgErr) {
-          console.warn(`⚠️ Template embed failed for ${p.name || 'user'}:`, imgErr.message);
-        }
-      }
-
-      // --- Draw fields ---
-      for (const f of fields) {
-        const value = (p[f.field] || "").toString().trim();
-        if (!value) continue;
-
-        const hex = (f.color || "#000000").replace("#", "").padEnd(6, "0").slice(0, 6);
-        const r = parseInt(hex.substring(0, 2), 16) / 255;
-        const g = parseInt(hex.substring(2, 4), 16) / 255;
-        const b = parseInt(hex.substring(4, 6), 16) / 255;
-
-        page.drawText(value, { x: f.x, y: 400 - f.y - f.size, size: f.size, font: customFont, color: rgb(r, g, b) });
-      }
-
-      // --- Save PDF ---
-      const pdfBytes = await pdfDoc.save();
-      const safeName = (p.name || p.Name || `user_${i + 1}`)
-        .replace(/[^a-z0-9_.-]/gi, "_")
-        .replace(/_{2,}/g, "_")
-        .toLowerCase();
-
-      archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
-      processedCount++;
-
-      // --- ETA calculation ---
-      const elapsed = (Date.now() - startTime) / 1000;
-      const avgTimePerPdf = elapsed / processedCount;
-      const remainingTime = avgTimePerPdf * (total - processedCount);
-
-      // --- Send live progress to frontend & flush ---
-      sendProgress({
-        stage: "processing",
-        task: "Generating certificates",
-        name: p.name || `User ${i + 1}`,
-        current: processedCount,
-        total,
-        percent: Math.round((processedCount / total) * 100),
-        eta: `${Math.ceil(remainingTime)}s`,
-        log: `✅ Generated PDF for ${p.name || `User ${i + 1}`} (${processedCount}/${total})`
-      });
-
-      // allow Node to flush progress
-      await new Promise((r) => setTimeout(r, 0));
+    for (const f of fields) {
+      const value = (p[f.field] || "").toString().trim();
+      if (!value) continue;
+      const hex = (f.color || "#000000").replace("#","").padEnd(6,"0").slice(0,6);
+      const r=parseInt(hex.substring(0,2),16)/255, g=parseInt(hex.substring(2,4),16)/255, b=parseInt(hex.substring(4,6),16)/255;
+      page.drawText(value, { x:f.x, y:400-f.y-f.size, size:f.size, font:customFont, color:rgb(r,g,b) });
     }
 
-    // ---- Finalize ZIP ----
-    sendProgress({ stage: "finalizing", task: "Creating ZIP file", log: "Finalizing ZIP archive..." });
-    await archive.finalize();
+    const pdfBytes = await pdfDoc.save();
+    const safeName = (p.name || `user_${i+1}`).replace(/[^a-z0-9_.-]/gi,"_").toLowerCase();
+    archive.append(Buffer.from(pdfBytes), { name:`${safeName}.pdf` });
 
-    if (!responseEnded) {
-      sendProgress({ stage: "completed", task: "All certificates generated", percent: 100, current: total, total, log: `🎉 Successfully generated ${total} certificates!` });
-    }
+    processedCount++;
+    const percent = Math.round((processedCount/total)*100);
+    sendProgress(key, { stage:"processing", task:`Generating certificates`, current: processedCount, total, percent });
+    await new Promise(r => setTimeout(r,0));
+  }
 
-  } catch (err) {
-    console.error("❌ Fatal error in /generate:", err);
-    sendProgress({ stage: "error", task: "Generation failed", error: err.message, log: `❌ Fatal error: ${err.message}` });
-    if (!responseEnded) res.status(500).json({ error: "Server error during generation" });
-  } finally {
-    // Mark as finished and process next in queue
-    isGenerating = false;
-    currentGenerationStartTime = null;
-    currentGenerationTotal = 0;
-    
-    // Process next request in queue if any
-    if (queue.length > 0) {
-      const next = queue.shift();
-      console.log(`🔄 Processing next request from queue. Remaining in queue: ${queue.length}`);
-      setTimeout(() => {
-        generateHandler(next.req, next.res);
-      }, 1000); // Small delay before starting next
-    }
+  await archive.finalize();
+  sendProgress(key, { stage:"completed", task:"All certificates generated", current:processedCount, total, percent:100 });
+
+  isGenerating = false;
+  currentGenerationStartTime = null;
+  currentGenerationTotal = 0;
+
+  // Start next in queue
+  if (queue.length > 0) {
+    const next = queue.shift();
+    setTimeout(() => generateHandler(next.req, next.key, path.join(__dirname, `temp_${next.key}.zip`)), 1000);
   }
 }
+
+
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
