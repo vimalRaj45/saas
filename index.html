@@ -2271,13 +2271,14 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
         }
       }, 500);
       
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        if (!window.generationCompleted) {
-          reject(new Error("Generation timeout after 5 minutes"));
-        }
-      }, 300000);
+// Timeout after 4 hours
+setTimeout(() => {
+  clearInterval(checkInterval);
+  if (!window.generationCompleted) {
+    reject(new Error("Generation timeout after 4 hours"));
+  }
+}, 14400000); // 14,400,000 ms = 4 hours
+
     });
 
   } catch (err) {
@@ -2707,5 +2708,6 @@ document.addEventListener('keydown',(e)=>{
 </script>
 </body>
 </html>
+
 
 
