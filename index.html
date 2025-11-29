@@ -1742,6 +1742,7 @@ evtSource.onmessage = function (event) {
 
   if (data.stage === "completed") {
     document.getElementById("status").innerHTML = "Completed!";
+    localStorage.removeItem("GEN_KEY");
     evtSource.close();
   }
 
@@ -2088,17 +2089,19 @@ evtSource.onmessage = function (event) {
   // Replace your existing generate button event listener with this:
 
 document.getElementById("generateBtn").addEventListener("click", async () => {
-  // Close any existing EventSource connections
+  // Close any existing EventSource connection
   if (window.currentEventSource) {
     window.currentEventSource.close();
     window.currentEventSource = null;
   }
 
-  // Reset progress UI
+  // Reset generation completed flag
+  window.generationCompleted = false;
+
+  // Modal HTML for live progress
   const progressHtml = `
     <div style="text-align:left;font-size:15px;">
       <b>Status:</b> <span id="swal-status">Starting…</span><br>
-      <b>Task:</b> <span id="swal-task">-</span><br>
       <b>Current Name:</b> <span id="swal-current-name">-</span><br>
       <b>Progress:</b> <span id="swal-progress-text">0%</span><br>
       <b>Processed:</b> <span id="swal-count">0/0</span><br>
@@ -2106,12 +2109,10 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
       <button style="float:right;margin-top:-4px;padding:2px 6px;font-size:12px;
              background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;"
              onclick="stopNow()">Stop</button>
-
       <div style="width:100%;height:14px;background:#eee;border-radius:6px;margin-top:12px;">
         <div id="swal-bar"
              style="width:0%;height:100%;background:#28a745;border-radius:6px;transition:0.25s ease;"></div>
       </div>
-
       <br>
       <div id="swal-log"
            style="height:120px;overflow-y:auto;background:#fafafa;padding:8px;border-radius:6px;
@@ -2122,179 +2123,29 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
     </div>
   `;
 
-  // Show progress modal
-  const progressModal = Swal.fire({
+  // Show modal
+  Swal.fire({
     title: "Generating Certificates…",
     html: progressHtml,
     allowOutsideClick: false,
     showConfirmButton: false,
-    width: '600px',
-    didOpen: () => {
-      // Start progress tracking AFTER modal is open
-      setupProgressTracking();
-    }
+    width: '600px'
   });
 
-  function setupProgressTracking() {
-    // Initialize progress tracking
-    let logBuffer = [];
-    let lastUpdateTime = 0;
-    const UPDATE_INTERVAL = 100; // Update UI every 100ms max
-
-    // Create EventSource connection with cache prevention
-    const eventSourceUrl = '/progress?' + new Date().getTime(); // Prevent caching
-    window.currentEventSource = new EventSource(eventSourceUrl);
-    
-    window.currentEventSource.onopen = function() {
-      console.log("✅ SSE Connection opened");
-      updateUI("status", "Connected to server");
-      addToLog("✅ Connected to progress stream");
-    };
-
-    window.currentEventSource.onmessage = function(event) {
-      try {
-        const data = JSON.parse(event.data);
-        console.log("📊 Progress Update:", data);
-
-        // Handle queue status
-        if (data.stage === "queued") {
-          updateUI("status", `Queued - Position ${data.position || 1}`);
-          updateUI("task", `Waiting in queue - ${data.waitTime || 'Calculating...'}`);
-          updateUI("eta", data.waitTime || 'Calculating...');
-          addToLog(data.log || `Your request is #${data.position || 1} in queue`);
-          
-          // Update progress bar for queue position visualization
-          const progressBar = document.getElementById("swal-bar");
-          if (progressBar) {
-            progressBar.style.background = "#ffc107"; // Yellow for queue
-            progressBar.style.width = "100%";
-          }
-          
-          return; // Don't process further updates while in queue
-        }
-
-        // Reset progress bar color when starting actual generation
-        if (data.stage === "started" || data.stage === "processing") {
-          const progressBar = document.getElementById("swal-bar");
-          if (progressBar) {
-            progressBar.style.background = "#28a745"; // Green for generation
-          }
-        }
-
-        // Throttle UI updates to prevent freezing
-        const now = Date.now();
-        if (now - lastUpdateTime > UPDATE_INTERVAL) {
-          updateAllUI(data);
-          lastUpdateTime = now;
-        } else {
-          // Schedule update for later
-          setTimeout(() => updateAllUI(data), UPDATE_INTERVAL);
-        }
-
-        // Close connection when done
-        if (data.stage === "completed" || data.stage === "error" || data.stage === "stopped") {
-          setTimeout(() => {
-            if (window.currentEventSource) {
-              window.currentEventSource.close();
-              window.currentEventSource = null;
-            }
-          }, 1000);
-        }
-
-      } catch (parseError) {
-        console.error("❌ Error parsing SSE data:", parseError);
-        addToLog("❌ Error parsing server data");
-      }
-    };
-
-    window.currentEventSource.onerror = function(error) {
-      console.error("❌ SSE Error:", error);
-      updateUI("status", "Connection error");
-      addToLog("⚠️ Connection issue with server");
-      
-      // Try to reconnect after 2 seconds
-      setTimeout(() => {
-        if (window.currentEventSource && window.currentEventSource.readyState === EventSource.CLOSED) {
-          console.log("🔄 Attempting to reconnect...");
-          window.currentEventSource.close();
-          setupProgressTracking();
-        }
-      }, 2000);
-    };
-
-    // Helper function to update all UI elements
-    function updateAllUI(data) {
-      // Update status
-      if (data.stage) {
-        updateUI("status", data.stage);
-      }
-      
-      // Update task
-      if (data.task) {
-        updateUI("task", data.task);
-      }
-      
-      // Update current name
-      if (data.name) {
-        updateUI("current-name", data.name);
-      }
-      
-      // Update progress percentage
-      if (data.percent !== undefined) {
-        updateUI("progress-text", data.percent + "%");
-        document.getElementById("swal-bar").style.width = data.percent + "%";
-      }
-      
-      // Update counts
-      if (data.current !== undefined && data.total !== undefined) {
-        updateUI("count", `${data.current}/${data.total}`);
-      }
-      
-      // Update ETA
-      if (data.eta) {
-        updateUI("eta", data.eta);
-      }
-
-      // Handle logs
-      if (data.log) {
-        addToLog(data.log);
-      }
-    }
-
-    // Helper function to update UI elements
-    function updateUI(elementId, value) {
-      const element = document.getElementById(`swal-${elementId}`);
-      if (element) {
-        element.textContent = value;
-      }
-    }
-
-    // Helper function to add logs
-    function addToLog(message) {
-      const timestamp = new Date().toLocaleTimeString();
-      const logEntry = `[${timestamp}] ${message}`;
-      
-      logBuffer.push(logEntry);
-      
-      // Keep only last 30 entries
-      if (logBuffer.length > 30) {
-        logBuffer = logBuffer.slice(-30);
-      }
-      
-      const logBox = document.getElementById("swal-log-text");
-      if (logBox) {
-        logBox.innerHTML = logBuffer.map(entry => `${entry}<br>`).join("");
-        // Auto-scroll to bottom
-        const logContainer = document.getElementById("swal-log");
-        if (logContainer) {
-          logContainer.scrollTop = logContainer.scrollHeight;
-        }
-      }
-    }
+  // Helper for logging
+  let logBuffer = [];
+  function addToLog(message) {
+    const timestamp = new Date().toLocaleTimeString();
+    logBuffer.push(`[${timestamp}] ${message}`);
+    if (logBuffer.length > 30) logBuffer = logBuffer.slice(-30);
+    const logBox = document.getElementById("swal-log-text");
+    if (logBox) logBox.innerHTML = logBuffer.join("<br>");
+    const logContainer = document.getElementById("swal-log");
+    if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
   }
 
   try {
-    // Send generate request
+    // Send generate request (returns JSON with key)
     const payload = {
       participants,
       templateUrl,
@@ -2308,87 +2159,101 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
       }))
     };
 
-    console.log("🚀 Sending generation request for", participants.length, "participants");
-
     const res = await fetch("/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
-    // Check if generation was stopped
-    if (res.headers.get("X-Generation-Stopped") === "1") {
-      if (window.currentEventSource) {
-        window.currentEventSource.close();
-        window.currentEventSource = null;
-      }
-      
-      Swal.fire({
-        icon: "info",
-        title: "Stopped!",
-        text: "Generation was stopped by the user.",
-        confirmButtonColor: "#dc3545"
-      });
-      return;
-    }
-
-    // Check if we got a queue response (409 status)
-    if (res.status === 409) {
-      const errorData = await res.json();
-      if (window.currentEventSource) {
-        window.currentEventSource.close();
-        window.currentEventSource = null;
-      }
-      
-      Swal.fire({
-        icon: "info",
-        title: "Request Cancelled",
-        text: errorData.message || "Your request was cancelled because the current generation was stopped.",
-        confirmButtonColor: "#dc3545"
-      });
-      return;
-    }
-
     if (!res.ok) {
-      const errorText = await res.text();
-      throw new Error(`Generation failed: ${errorText}`);
+      const errText = await res.text();
+      throw new Error(`Generation request failed: ${errText}`);
     }
 
-    // Download ZIP
-    const blob = await res.blob();
-    
-    // Close EventSource before download
-    if (window.currentEventSource) {
-      window.currentEventSource.close();
-      window.currentEventSource = null;
-    }
+    const result = await res.json();
+    const genKey = result.key;
+    localStorage.setItem("GEN_KEY", genKey);
+    addToLog(`Generation key received: ${genKey}`);
 
-    const url = window.URL.createObjectURL(blob);
+    // Setup SSE for live progress
+    const eventSourceUrl = `/progress?key=${genKey}&_=${Date.now()}`;
+    window.currentEventSource = new EventSource(eventSourceUrl);
+
+    window.currentEventSource.onmessage = function(event) {
+      const data = JSON.parse(event.data);
+
+      // Update modal UI
+      if (data.stage) document.getElementById("swal-status").textContent = data.stage;
+      if (data.name) document.getElementById("swal-current-name").textContent = data.name;
+      if (data.percent !== undefined) {
+        document.getElementById("swal-progress-text").textContent = data.percent + "%";
+        document.getElementById("swal-bar").style.width = data.percent + "%";
+      }
+      if (data.current !== undefined && data.total !== undefined) {
+        document.getElementById("swal-count").textContent = `${data.current}/${data.total}`;
+      }
+      if (data.eta) document.getElementById("swal-eta").textContent = data.eta;
+      if (data.log) addToLog(data.log);
+
+      // Completed
+      if (data.stage === "completed") {
+        window.generationCompleted = true;
+        if (window.currentEventSource) {
+          window.currentEventSource.close();
+          window.currentEventSource = null;
+        }
+      }
+
+      // Handle error stage
+      if (data.stage === "error") {
+        addToLog("❌ Error occurred on server");
+        if (window.currentEventSource) {
+          window.currentEventSource.close();
+          window.currentEventSource = null;
+        }
+      }
+    };
+
+    window.currentEventSource.onerror = function(err) {
+      addToLog("⚠️ SSE connection error");
+      if (window.currentEventSource) {
+        window.currentEventSource.close();
+        window.currentEventSource = null;
+      }
+    };
+
+    // Wait for completion
+    await new Promise((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (window.generationCompleted) {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 500);
+    });
+
+    // Fetch ZIP after completion
+    const zipRes = await fetch(`/download?key=${genKey}`);
+    if (!zipRes.ok) throw new Error("Failed to download ZIP");
+    const zipBlob = await zipRes.blob();
+    const url = window.URL.createObjectURL(zipBlob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "certificates_bulk.zip";
+    a.download = `certificates_${genKey}.zip`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
 
-    // Show completion message
     Swal.fire({
       icon: "success",
       title: "Completed!",
-      text: "ZIP downloaded successfully!",
+      text: "Certificates downloaded successfully!",
       confirmButtonColor: "#28a745"
     });
 
   } catch (err) {
     console.error("❌ Generation error:", err);
-    
-    // Close EventSource on error
-    if (window.currentSource) {
-      window.currentEventSource.close();
-      window.currentEventSource = null;
-    }
-    
     Swal.fire({
       icon: "error",
       title: "Error",
@@ -2397,10 +2262,43 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
   }
 });
 
+// Stop button handler
+async function stopNow() {
+  const key = localStorage.getItem("GEN_KEY");
+  if (!key) return;
+  try {
+    const res = await fetch(`/stop?key=${key}`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      addToLog("[System] Generation stopped by user");
+      document.getElementById("swal-status").textContent = "Stopped by user";
+      if (window.currentEventSource) {
+        window.currentEventSource.close();
+        window.currentEventSource = null;
+      }
+      window.generationCompleted = true;
+      Swal.fire({
+        icon: "info",
+        title: "Stopped!",
+        text: "Generation has been stopped.",
+        confirmButtonColor: "#dc3545"
+      });
+    }
+  } catch (err) {
+    console.error("Error stopping generation:", err);
+    Swal.fire({
+      icon: "error",
+      title: "Error",
+      text: "Failed to stop generation"
+    });
+  }
+}
+
 // Also add this helper function for the stop button
 async function stopNow() {
   try {
-    const res = await fetch("/stop-generate", { method: "POST" });
+    const key = localStorage.getItem("GEN_KEY");
+    const res = await fetch(`/stop?key=${key}`, { method: "POST" });
     const data = await res.json();
     
     if (data.success) {
