@@ -7,7 +7,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <style>
     /* Rich Color Scheme */
     :root {
@@ -1327,6 +1327,23 @@
                 <button id="generateBtn" class="btn btn-success py-2 px-4 rounded-2 flex-fill" disabled>
                   <i class="bi bi-file-earmark-zip me-2"></i> Generate All & Download ZIP
                 </button>
+                <div class="card p-4 mt-3">
+
+  <h5 id="status">Waiting to start...</h5>
+
+  <!-- Progress bar -->
+  <div class="progress mt-3" style="height: 30px; font-size: 16px;">
+    <div id="progressBar" class="progress-bar bg-success" style="width: 0%;">0%</div>
+  </div>
+
+  <div class="mt-3">
+    <b>Completed:</b> <span id="count">0/0</span><br>
+    <b>Current Certificate:</b> <span id="currentName">—</span><br>
+    <b>Estimated Time Left:</b> <span id="eta">—</span>
+  </div>
+
+</div>
+
               </div>
             </div>
 
@@ -1681,6 +1698,47 @@
       }
     });
 
+    const evtSource = new EventSource("/progress");
+
+evtSource.onmessage = function (event) {
+  const data = JSON.parse(event.data);
+  console.log("Progress Update:", data);
+
+  if (data.stage === "connected") {
+    document.getElementById("status").innerHTML = "Connected to progress stream...";
+  }
+
+  if (data.percent !== undefined) {
+    document.getElementById("progressBar").style.width = data.percent + "%";
+    document.getElementById("progressBar").innerText = data.percent + "%";
+
+    document.getElementById("count").innerHTML = `${data.current}/${data.total}`;
+  }
+
+  if (data.name) {
+    document.getElementById("currentName").innerHTML = data.name;
+  }
+
+  if (data.estTimeLeft) {
+    document.getElementById("eta").innerHTML = data.estTimeLeft;
+  }
+
+  if (data.stage === "finalizing") {
+    document.getElementById("status").innerHTML = "Finalizing ZIP...";
+  }
+
+  if (data.stage === "completed") {
+    document.getElementById("status").innerHTML = "Completed!";
+    evtSource.close();
+  }
+
+  if (data.stage === "error") {
+    document.getElementById("status").innerHTML = "Error occurred!";
+    evtSource.close();
+  }
+};
+
+
     document.getElementById("templateFile").addEventListener("change", async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -2014,7 +2072,7 @@
       }
     });
 
-     document.getElementById("generateBtn").addEventListener("click", async () => {
+    document.getElementById("generateBtn").addEventListener("click", async () => {
   Swal.fire({
     title: "Generating Certificates...",
     html: `
@@ -2114,7 +2172,6 @@
     });
   }
 });
-
 
     // Initialize the app
     window.addEventListener("load", () => {
@@ -2448,9 +2505,7 @@ document.addEventListener('keydown',(e)=>{
   }
 });
 </script>
-
-
-
 </body>
 </html>
+
 
