@@ -261,7 +261,6 @@ app.post('/preview-pdf', async (req, res) => {
   }
 });
 
-
 let clients = []; // connected SSE clients
 
 app.get("/progress", (req, res) => {
@@ -293,6 +292,12 @@ function sendProgress(data) {
   });
 }
 
+// ====== GENERATION QUEUE SYSTEM ======
+let isGenerating = false;
+let queue = [];
+let currentGenerationStartTime = null;
+let currentGenerationTotal = 0;
+
 // ----------------------
 // 1️⃣ Stop Generation
 // ----------------------
@@ -300,6 +305,18 @@ let stopRequested = false; // global flag
 
 app.post("/stop-generate", (req, res) => {
   stopRequested = true; // set stop flag
+  
+  // Clear queue if requested
+  if (queue.length > 0) {
+    queue.forEach(queued => {
+      queued.res.status(409).json({ 
+        error: "Generation cancelled by user",
+        message: "Your request was cancelled because the current generation was stopped"
+      });
+    });
+    queue = [];
+  }
+  
   sendProgress({
     stage: "stopped",
     task: "⛔ Stopped by user"
@@ -308,8 +325,48 @@ app.post("/stop-generate", (req, res) => {
   return res.json({ success: true, message: "Generation stopped" });
 });
 
-// 2️⃣ Generate Certificates
+// Calculate estimated wait time
+function calculateWaitTime() {
+  if (!currentGenerationStartTime || !currentGenerationTotal) return "Unknown";
+  
+  const elapsed = (Date.now() - currentGenerationStartTime) / 1000;
+  const progressPercent = Math.min(95, Math.max(5, (elapsed / 30) * 100)); // Estimate based on average time
+  const remainingTime = (elapsed / progressPercent) * (100 - progressPercent);
+  
+  return `${Math.ceil(remainingTime / 60)} minutes ${Math.ceil(remainingTime % 60)} seconds`;
+}
+
+// 2️⃣ Generate Certificates (Main endpoint with queue)
 app.post("/generate", async (req, res) => {
+  // If already generating, add to queue
+  if (isGenerating) {
+    const position = queue.length + 1;
+    const waitTime = calculateWaitTime();
+    
+    queue.push({ req, res, timestamp: Date.now() });
+    
+    sendProgress({
+      stage: "queued",
+      task: "Waiting in queue...",
+      position: position,
+      waitTime: waitTime,
+      log: `Your request is #${position} in queue. Estimated wait time: ${waitTime}`
+    });
+    
+    console.log(`📋 Request added to queue. Position: ${position}, Queue size: ${queue.length}`);
+    return;
+  }
+
+  // Start generation immediately
+  isGenerating = true;
+  currentGenerationStartTime = Date.now();
+  currentGenerationTotal = req.body.participants?.length || 0;
+  
+  await generateHandler(req, res);
+});
+
+// Main generation logic
+async function generateHandler(req, res) {
   stopRequested = false; // reset at start
   console.log("⚡ Generation started");
 
@@ -336,6 +393,9 @@ app.post("/generate", async (req, res) => {
     const { participants, templateUrl, fields } = req.body;
 
     if (!participants || total === 0) {
+      isGenerating = false;
+      currentGenerationStartTime = null;
+      currentGenerationTotal = 0;
       return res.status(400).json({ error: "No participants" });
     }
 
@@ -349,7 +409,12 @@ app.post("/generate", async (req, res) => {
       log: `Starting generation of ${total} certificates...`
     });
 
-    if (stopRequested) return endResponse("Stopped before starting ZIP");
+    if (stopRequested) {
+      isGenerating = false;
+      currentGenerationStartTime = null;
+      currentGenerationTotal = 0;
+      return endResponse("Stopped before starting ZIP");
+    }
 
     // ---- STREAM ZIP ----
     res.setHeader("Content-Type", "application/zip");
@@ -392,6 +457,9 @@ app.post("/generate", async (req, res) => {
       if (stopRequested) {
         console.log("⛔ STOP REQUESTED — Aborting generation...");
         archive.abort();
+        isGenerating = false;
+        currentGenerationStartTime = null;
+        currentGenerationTotal = 0;
         return endResponse("User stopped generation");
       }
 
@@ -472,9 +540,22 @@ app.post("/generate", async (req, res) => {
     console.error("❌ Fatal error in /generate:", err);
     sendProgress({ stage: "error", task: "Generation failed", error: err.message, log: `❌ Fatal error: ${err.message}` });
     if (!responseEnded) res.status(500).json({ error: "Server error during generation" });
+  } finally {
+    // Mark as finished and process next in queue
+    isGenerating = false;
+    currentGenerationStartTime = null;
+    currentGenerationTotal = 0;
+    
+    // Process next request in queue if any
+    if (queue.length > 0) {
+      const next = queue.shift();
+      console.log(`🔄 Processing next request from queue. Remaining in queue: ${queue.length}`);
+      setTimeout(() => {
+        generateHandler(next.req, next.res);
+      }, 1000); // Small delay before starting next
+    }
   }
-});
-
+}
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
