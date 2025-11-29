@@ -273,7 +273,7 @@ app.post('/preview-pdf', async (req, res) => {
 });
 
 
-// --- Generate ZIP with all certificates (with step-by-step console) ---
+// --- Generate ZIP with Live Progress for Frontend ---
 app.post('/generate', async (req, res) => {
   console.log("\n-----------------------------------------");
   console.log("📌 GENERATE ZIP API HIT");
@@ -281,117 +281,258 @@ app.post('/generate', async (req, res) => {
 
   try {
     const { participants, templateUrl, fields } = req.body;
-    console.log("➡ Step 1: Extracting body data...");
-    console.log("   participants count:", participants.length);
-    console.log("   templateUrl:", templateUrl);
-    console.log("   fields:", fields);
+
+    const total = participants.length;
+    let processedCount = 0;
+
+    // Send initial progress
+    sendProgress({
+      stage: "start",
+      message: "Starting certificate generation...",
+      total,
+      current: 0,
+      percent: 0
+    });
 
     // Create archive
-    console.log("➡ Step 2: Creating ZIP archive...");
     const archive = archiver('zip', { zlib: { level: 9 } });
 
-    // Set headers BEFORE piping
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename=certificates.zip');
-
-    // Pipe archive to response
     archive.pipe(res);
-    console.log("   ✔ Archive piped to response");
 
-    // Load template once for speed
+    // Track archive progress
+    archive.on('progress', (progressData) => {
+      console.log('ZIP Progress:', progressData);
+    });
+
+    archive.on('warning', (err) => {
+      if (err.code === 'ENOENT') {
+        console.log('Archive warning:', err);
+      } else {
+        throw err;
+      }
+    });
+
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      sendProgress({
+        stage: "error",
+        message: "ZIP creation failed: " + err.message
+      });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "ZIP creation failed" });
+      }
+    });
+
+    // Load template
+    sendProgress({
+      stage: "processing",
+      message: "Loading template image...",
+      percent: 5
+    });
+
     let imageBytes = null;
     if (templateUrl && templateUrl.startsWith('http')) {
-      console.log("➡ Step 3: Fetching template image...");
       try {
         imageBytes = await getBufferFromUrl(templateUrl);
-        console.log("   ✔ Template image downloaded");
-      } catch (e) {
-        console.error("   ❌ Template Download Error:", e);
-      }
-    } else {
-      console.log("   ℹ No valid template URL provided");
-    }
-
-    // Load Unicode font once
-    console.log("➡ Step 4: Loading Unicode font...");
-    const fontUrl = "https://github.com/googlefonts/noto-fonts/blob/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf?raw=true";
-    const fontBytes = await fetch(fontUrl).then(r => r.arrayBuffer());
-    console.log("   ✔ Unicode font loaded");
-
-    // Loop participants
-    let count = 1;
-    for (const p of participants) {
-      console.log(`➡ Step 5: Generating PDF for participant #${count}`);
-      const pdfDoc = await PDFDocument.create();
-      pdfDoc.registerFontkit(fontkit);
-      const customFont = await pdfDoc.embedFont(fontBytes);
-      const page = pdfDoc.addPage([600, 400]);
-      console.log("   ✔ PDF document and page created");
-
-      // Embed template image
-      if (imageBytes) {
-        try {
-          let img;
-          const lower = templateUrl.toLowerCase();
-          if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) img = await pdfDoc.embedJpg(imageBytes);
-          else if (lower.endsWith('.png')) img = await pdfDoc.embedPng(imageBytes);
-
-          if (img) {
-            page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
-            console.log("   ✔ Template image embedded");
-          }
-        } catch (imgErr) {
-          console.error("   ❌ Image Embed Error:", imgErr);
-        }
-      }
-
-      // Draw fields
-      console.log("   ➡ Drawing fields...");
-      for (const f of fields) {
-        const value = (p[f.field] || "").toString().trim();
-        if (!value) {
-          console.log(`      ⚠ Field '${f.field}' is empty, skipping`);
-          continue;
-        }
-
-        let hex = (f.color || "#000000").replace('#', '');
-        if (hex.length !== 6) hex = "000000";
-
-        const r = parseInt(hex.substring(0, 2), 16) / 255;
-        const g = parseInt(hex.substring(2, 4), 16) / 255;
-        const b = parseInt(hex.substring(4, 6), 16) / 255;
-
-        page.drawText(value, {
-          x: f.x,
-          y: 400 - f.y - f.size,
-          size: f.size,
-          font: customFont,
-          color: rgb(r, g, b)
+        sendProgress({
+          stage: "processing",
+          message: "Template loaded successfully",
+          percent: 10
         });
-        console.log(`      ✔ Field '${f.field}' drawn at (${f.x}, ${400 - f.y - f.size})`);
+      } catch (e) {
+        console.error("Template error:", e);
+        sendProgress({
+          stage: "error",
+          message: "Failed to load template image"
+        });
       }
-
-      // Add PDF to ZIP
-      const pdfBytes = await pdfDoc.save();
-      const safeName = (p.name || p.Name || 'certificate').toString().replace(/[^a-z0-9_-]/gi, '_');
-      archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
-      console.log(`   ✔ PDF added to ZIP as '${safeName}.pdf'\n`);
-      count++;
     }
 
-    // Finalize archive
-    console.log("➡ Step 6: Finalizing ZIP archive...");
+    // Load font
+    sendProgress({
+      stage: "processing",
+      message: "Loading fonts...",
+      percent: 15
+    });
+
+    const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+    let fontBytes;
+    try {
+      const fontResponse = await fetch(fontUrl);
+      fontBytes = await fontResponse.arrayBuffer();
+      sendProgress({
+        stage: "processing",
+        message: "Fonts loaded successfully",
+        percent: 20
+      });
+    } catch (e) {
+      console.error("Font loading error:", e);
+      sendProgress({
+        stage: "error",
+        message: "Failed to load font"
+      });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Font loading failed" });
+      }
+      return;
+    }
+
+    // Process participants
+    let index = 1;
+
+    for (const p of participants) {
+      processedCount++;
+
+      const progressPercent = 20 + Math.round((processedCount / total) * 75); // 20-95% range for processing
+      const estimatedTimeLeft = Math.round((total - processedCount) * 0.1); // Estimate 100ms per certificate
+
+      // --- SEND LIVE PROGRESS ---
+      sendProgress({
+        stage: "processing",
+        current: processedCount,
+        total,
+        percent: progressPercent,
+        name: p.name || p.Name || `Participant ${processedCount}`,
+        estTimeLeft: `${estimatedTimeLeft}s`,
+        message: `Generating certificate ${processedCount} of ${total}`
+      });
+
+      console.log(`📄 Processing ${processedCount}/${total}: ${p.name || p.Name}`);
+
+      try {
+        // Create PDF
+        const pdfDoc = await PDFDocument.create();
+        pdfDoc.registerFontkit(fontkit);
+        const customFont = await pdfDoc.embedFont(fontBytes);
+        const page = pdfDoc.addPage([600, 400]);
+
+        // Add image
+        if (imageBytes) {
+          try {
+            const lower = templateUrl.toLowerCase();
+            let img;
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+              img = await pdfDoc.embedJpg(imageBytes);
+            } else if (lower.endsWith(".png")) {
+              img = await pdfDoc.embedPng(imageBytes);
+            } else {
+              // Try both if extension not clear
+              try {
+                img = await pdfDoc.embedJpg(imageBytes);
+              } catch {
+                img = await pdfDoc.embedPng(imageBytes);
+              }
+            }
+
+            if (img) {
+              page.drawImage(img, { 
+                x: 0, 
+                y: 0, 
+                width: 600, 
+                height: 400 
+              });
+            }
+          } catch (err) { 
+            console.log("Image embedding skipped:", err.message);
+          }
+        }
+
+        // Draw fields
+        for (const f of fields) {
+          const value = (p[f.field] || "").trim();
+          if (!value) continue;
+
+          let hex = (f.color || "#000000").replace("#", "");
+          // Handle 3-digit hex codes
+          if (hex.length === 3) {
+            hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+          }
+          if (hex.length !== 6) hex = "000000";
+
+          const r = parseInt(hex.substring(0, 2), 16) / 255;
+          const g = parseInt(hex.substring(2, 4), 16) / 255;
+          const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+          page.drawText(value, {
+            x: f.x,
+            y: 400 - f.y - f.size,
+            size: f.size,
+            font: customFont,
+            color: rgb(r, g, b)
+          });
+        }
+
+        // Save PDF
+        const pdfBytes = await pdfDoc.save();
+        const safeName = (p.name || p.Name || 'certificate')
+          .replace(/[^a-z0-9_-]/gi, '_')
+          .toLowerCase();
+
+        archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
+
+        // Small delay to make progress visible and prevent overwhelming the system
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+      } catch (certError) {
+        console.error(`Error generating certificate for ${p.name}:`, certError);
+        sendProgress({
+          stage: "processing",
+          message: `Error with certificate ${processedCount}, skipping...`,
+          percent: progressPercent
+        });
+        // Continue with next participant even if one fails
+        continue;
+      }
+
+      index++;
+    }
+
+    // Finalize ZIP
+    sendProgress({
+      stage: "finalizing",
+      message: "Finalizing ZIP file...",
+      percent: 96
+    });
+
+    console.log("📦 Finalizing ZIP archive...");
+
+    // Handle archive finalization
     archive.finalize();
+
+    // Wait for archive to complete
+    await new Promise((resolve, reject) => {
+      archive.on('end', resolve);
+      archive.on('error', reject);
+    });
+
+    sendProgress({
+      stage: "completed",
+      percent: 100,
+      message: "All certificates generated and ZIP ready for download!",
+      total: processedCount
+    });
+
     console.log("🎉 ZIP generation completed successfully");
+    console.log(`✅ Generated ${processedCount} certificates`);
     console.log("-----------------------------------------\n");
 
   } catch (err) {
     console.error("🔥 ZIP Generation Error:", err);
-    if (!res.headersSent) res.status(500).json({ error: 'Generation failed' });
+
+    sendProgress({
+      stage: "error",
+      message: "Generation failed: " + err.message
+    });
+
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Generation failed: " + err.message });
+    }
   }
 });
-
 
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
+
