@@ -2056,21 +2056,31 @@ evtSource.onmessage = function (event) {
       }
     });
 
-    document.getElementById("generateBtn").addEventListener("click", async () => {
+   document.getElementById("generateBtn").addEventListener("click", async () => {
+
+  // --- SWEETALERT TRANSPARENT PROGRESS WINDOW ---
   Swal.fire({
-    title: "Generating Certificates...",
+    title: "Generating Certificates…",
     html: `
-      <div style="text-align:left;">
-        <b>Status:</b> <span id="swal-status">Connecting...</span><br>
-        <b>Current:</b> <span id="swal-current-name">-</span><br>
+      <div style="text-align:left;font-size:15px;">
+        <b>Status:</b> <span id="swal-status">Connecting to server…</span><br>
+        <b>Backend Task:</b> <span id="swal-task">-</span><br>
+        <b>Current Name:</b> <span id="swal-current-name">-</span><br>
         <b>Progress:</b> <span id="swal-progress-text">0%</span><br>
-        <b>Count:</b> <span id="swal-count">0/0</span><br>
+        <b>Processed:</b> <span id="swal-count">0/0</span><br>
         <b>ETA:</b> <span id="swal-eta">Calculating…</span>
 
-        <div id="swal-progress-bar"
-             style="width:100%;height:14px;background:#ddd;border-radius:6px;margin-top:10px;">
+        <div style="width:100%;height:14px;background:#eee;border-radius:6px;margin-top:12px;">
           <div id="swal-bar"
-               style="width:0%;height:100%;background:#28a745;border-radius:6px;transition:0.2s;"></div>
+               style="width:0%;height:100%;background:#28a745;border-radius:6px;transition:0.25s ease;"></div>
+        </div>
+
+        <br>
+        <div id="swal-log"
+             style="height:120px;overflow-y:auto;background:#fafafa;padding:8px;border-radius:6px;
+             border:1px solid #ddd;font-size:13px;">
+          <b>Live Backend Logs:</b><br>
+          <span id="swal-log-text" style="color:#444;">Waiting for server…</span>
         </div>
       </div>
     `,
@@ -2078,15 +2088,20 @@ evtSource.onmessage = function (event) {
     showConfirmButton: false
   });
 
-  // 👉 1. Connect to SSE
+  // ---------- CONNECT TO SSE ----------
   const evtSource = new EventSource("/progress");
+
+  // 🔥 ULTRA-SCALE LOG BUFFER
+  let logBuffer = [];
+  let logTimer = null;
 
   evtSource.onmessage = (event) => {
     const data = JSON.parse(event.data);
 
-    // Update Swal Elements
-    document.getElementById("swal-status").innerText = data.stage || "-";
-    document.getElementById("swal-current-name").innerText = data.name || "-";
+    // ----------- BASIC LIVE UI UPDATES -----------
+    if (data.stage) document.getElementById("swal-status").innerText = data.stage;
+    if (data.task) document.getElementById("swal-task").innerText = data.task;
+    if (data.name) document.getElementById("swal-current-name").innerText = data.name;
 
     if (data.percent !== undefined) {
       document.getElementById("swal-progress-text").innerText = data.percent + "%";
@@ -2097,20 +2112,37 @@ evtSource.onmessage = function (event) {
       document.getElementById("swal-count").innerText = `${data.current}/${data.total}`;
     }
 
-    if (data.estTimeLeft) {
-      document.getElementById("swal-eta").innerText = data.estTimeLeft;
+    if (data.eta) document.getElementById("swal-eta").innerText = data.eta;
+
+    // -------------------------------------------------------
+    //  🔥 REAL ULTRA-SCALE LOG HANDLER (10K+ safe)
+    // -------------------------------------------------------
+    if (data.log || data.message) {
+      const logBox = document.getElementById("swal-log-text");
+      logBuffer.push(data.log || data.message);
+
+      // Only update DOM once every 80ms (prevents freezing)
+      if (!logTimer) {
+        logTimer = setTimeout(() => {
+          if (logBuffer.length > 200) logBuffer = logBuffer.slice(-200);
+          logBox.innerHTML = logBuffer.map(l => `<br>${l}`).join("");
+          logBox.parentElement.scrollTop = logBox.parentElement.scrollHeight;
+          logTimer = null;
+        }, 80);
+      }
     }
 
+    // ---------- CLOSE WHEN DONE ----------
     if (data.stage === "completed") {
       evtSource.close();
       Swal.update({
-        title: "Finalizing ZIP...",
+        title: "Finalizing ZIP…",
       });
     }
   };
 
   try {
-    // 👉 2. Start Generation
+    // ---------- SEND GENERATE REQUEST ----------
     const payload = {
       participants,
       templateUrl,
@@ -2132,7 +2164,7 @@ evtSource.onmessage = function (event) {
 
     if (!res.ok) throw new Error("Generation failed");
 
-    // 👉 3. Download ZIP
+    // ---------- DOWNLOAD ZIP ----------
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2156,6 +2188,7 @@ evtSource.onmessage = function (event) {
     });
   }
 });
+
 
     // Initialize the app
     window.addEventListener("load", () => {
