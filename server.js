@@ -299,265 +299,180 @@ function sendProgress(data) {
 }
 
 
+// -------------------
+// SSE Progress Store
+// -------------------
+let clients = [];
 
-// --- Generate ZIP with Live Progress for Frontend ---
-app.post('/generate', async (req, res) => {
-  console.log("\n-----------------------------------------");
-  console.log("📌 GENERATE ZIP API HIT");
-  console.log("-----------------------------------------");
+app.get("/progress", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  clients.push(res);
+
+  req.on("close", () => {
+    clients = clients.filter(c => c !== res);
+  });
+});
+
+
+
+
+// -------------------
+// Ultra-Scale ZIP Generation
+// -------------------
+app.post("/generate", async (req, res) => {
+  console.log("⚡ Ultra-scale generation started");
 
   try {
     const { participants, templateUrl, fields } = req.body;
-
     const total = participants.length;
+    if (!participants || total === 0) {
+      return res.status(400).json({ error: "No participants" });
+    }
+
     let processedCount = 0;
 
-    // Send initial progress
-    sendProgress({
-      stage: "start",
-      message: "Starting certificate generation...",
-      total,
-      current: 0,
-      percent: 0
-    });
-
-    // Create archive
-    const archive = archiver('zip', { zlib: { level: 9 } });
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=certificates.zip');
+    // ----------------
+    // Stream ZIP
+    // ----------------
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename=certificates.zip`);
+    const archive = archiver("zip", { zlib: { level: 9 } });
     archive.pipe(res);
 
-    // Track archive progress
-    archive.on('progress', (progressData) => {
-      console.log('ZIP Progress:', progressData);
-    });
-
-    archive.on('warning', (err) => {
-      if (err.code === 'ENOENT') {
-        console.log('Archive warning:', err);
-      } else {
-        throw err;
-      }
-    });
-
-    archive.on('error', (err) => {
-      console.error('Archive error:', err);
-      sendProgress({
-        stage: "error",
-        message: "ZIP creation failed: " + err.message
-      });
-      if (!res.headersSent) {
-        res.status(500).json({ error: "ZIP creation failed" });
-      }
-    });
-
-    // Load template
-    sendProgress({
-      stage: "processing",
-      message: "Loading template image...",
-      percent: 5
-    });
-
-    let imageBytes = null;
-    if (templateUrl && templateUrl.startsWith('http')) {
+    // ----------------
+    // Load Template Once
+    // ----------------
+    let templateBuffer = null;
+    if (templateUrl) {
       try {
-        imageBytes = await getBufferFromUrl(templateUrl);
-        sendProgress({
-          stage: "processing",
-          message: "Template loaded successfully",
-          percent: 10
-        });
+        templateBuffer = await getBufferFromUrl(templateUrl);
+        sendProgress({ stage: "template", task: "Template loaded" });
       } catch (e) {
-        console.error("Template error:", e);
-        sendProgress({
-          stage: "error",
-          message: "Failed to load template image"
-        });
+        sendProgress({ stage: "template", task: "Template failed, continuing without image" });
       }
     }
 
-    // Load font
-    sendProgress({
-      stage: "processing",
-      message: "Loading fonts...",
-      percent: 15
-    });
-
+    // ----------------
+    // Load Font Once
+    // ----------------
     const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-    let fontBytes;
-    try {
-      const fontResponse = await fetch(fontUrl);
-      fontBytes = await fontResponse.arrayBuffer();
-      sendProgress({
-        stage: "processing",
-        message: "Fonts loaded successfully",
-        percent: 20
-      });
-    } catch (e) {
-      console.error("Font loading error:", e);
-      sendProgress({
-        stage: "error",
-        message: "Failed to load font"
-      });
-      if (!res.headersSent) {
-        res.status(500).json({ error: "Font loading failed" });
-      }
-      return;
-    }
+    const fontBytes = await (await fetch(fontUrl)).arrayBuffer();
 
-    // Process participants
-    let index = 1;
+    sendProgress({ stage: "start", task: "Starting generation", percent: 0, total, current: 0 });
 
-    for (const p of participants) {
-      processedCount++;
+    // ----------------
+    // Batch Processing
+    // ----------------
+    const BATCH_SIZE = 200; // adjustable based on RAM
+    const batches = Math.ceil(total / BATCH_SIZE);
 
-      const progressPercent = 20 + Math.round((processedCount / total) * 75); // 20-95% range for processing
-      const estimatedTimeLeft = Math.round((total - processedCount) * 0.1); // Estimate 100ms per certificate
+    for (let b = 0; b < batches; b++) {
+      const start = b * BATCH_SIZE;
+      const end = Math.min(start + BATCH_SIZE, total);
+      const batch = participants.slice(start, end);
 
-      // --- SEND LIVE PROGRESS ---
-      sendProgress({
-        stage: "processing",
-        current: processedCount,
-        total,
-        percent: progressPercent,
-        name: p.name || p.Name || `Participant ${processedCount}`,
-        estTimeLeft: `${estimatedTimeLeft}s`,
-        message: `Generating certificate ${processedCount} of ${total}`
-      });
+      sendProgress({ stage: "batch", task: `Processing batch ${b + 1}/${batches}` });
 
-      console.log(`📄 Processing ${processedCount}/${total}: ${p.name || p.Name}`);
+      const promises = batch.map(async (p, i) => {
+        const index = start + i + 1;
+        try {
+          const pdfDoc = await PDFDocument.create();
+          pdfDoc.registerFontkit(fontkit);
+          const customFont = await pdfDoc.embedFont(fontBytes);
+          const page = pdfDoc.addPage([600, 400]);
 
-      try {
-        // Create PDF
-        const pdfDoc = await PDFDocument.create();
-        pdfDoc.registerFontkit(fontkit);
-        const customFont = await pdfDoc.embedFont(fontBytes);
-        const page = pdfDoc.addPage([600, 400]);
-
-        // Add image
-        if (imageBytes) {
-          try {
-            const lower = templateUrl.toLowerCase();
-            let img;
-            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
-              img = await pdfDoc.embedJpg(imageBytes);
-            } else if (lower.endsWith(".png")) {
-              img = await pdfDoc.embedPng(imageBytes);
-            } else {
-              // Try both if extension not clear
-              try {
-                img = await pdfDoc.embedJpg(imageBytes);
-              } catch {
-                img = await pdfDoc.embedPng(imageBytes);
+          // Add template image if exists
+          if (templateBuffer) {
+            try {
+              let img;
+              const lower = templateUrl.toLowerCase();
+              if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+                img = await pdfDoc.embedJpg(templateBuffer);
+              } else {
+                img = await pdfDoc.embedPng(templateBuffer);
               }
-            }
-
-            if (img) {
-              page.drawImage(img, { 
-                x: 0, 
-                y: 0, 
-                width: 600, 
-                height: 400 
-              });
-            }
-          } catch (err) { 
-            console.log("Image embedding skipped:", err.message);
+              page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
+            } catch {}
           }
-        }
 
-        // Draw fields
-        for (const f of fields) {
-          const value = (p[f.field] || "").trim();
-          if (!value) continue;
+          // Draw dynamic fields
+          for (const f of fields) {
+            const value = (p[f.field] || "").toString();
+            if (!value) continue;
 
-          let hex = (f.color || "#000000").replace("#", "");
-          // Handle 3-digit hex codes
-          if (hex.length === 3) {
-            hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+            const hex = (f.color || "#000000").replace("#", "");
+            const r = parseInt(hex.substring(0, 2), 16) / 255;
+            const g = parseInt(hex.substring(2, 4), 16) / 255;
+            const b2 = parseInt(hex.substring(4, 6), 16) / 255;
+
+            page.drawText(value, {
+              x: f.x,
+              y: 400 - f.y - f.size,
+              size: f.size,
+              font: customFont,
+              color: rgb(r, g, b2)
+            });
           }
-          if (hex.length !== 6) hex = "000000";
 
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
+          const pdfBytes = await pdfDoc.save();
+          const safeName = (p.name || p.Name || `user_${index}`).replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
+          archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
 
-          page.drawText(value, {
-            x: f.x,
-            y: 400 - f.y - f.size,
-            size: f.size,
-            font: customFont,
-            color: rgb(r, g, b)
-          });
+          processedCount++;
+          if (index % 25 === 0 || index === total) {
+            sendProgress({
+              stage: "processing",
+              task: `Generating certificates`,
+              current: processedCount,
+              total,
+              percent: Math.round((processedCount / total) * 90),
+              name: p.name,
+              log: `Processed ${processedCount}/${total}: ${p.name || safeName}`
+            });
+          }
+        } catch (e) {
+          sendProgress({ stage: "processing", task: "Error generating certificate", log: e.message });
         }
+      });
 
-        // Save PDF
-        const pdfBytes = await pdfDoc.save();
-        const safeName = (p.name || p.Name || 'certificate')
-          .replace(/[^a-z0-9_-]/gi, '_')
-          .toLowerCase();
-
-        archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
-
-        // Small delay to make progress visible and prevent overwhelming the system
-        await new Promise(resolve => setTimeout(resolve, 50));
-
-      } catch (certError) {
-        console.error(`Error generating certificate for ${p.name}:`, certError);
-        sendProgress({
-          stage: "processing",
-          message: `Error with certificate ${processedCount}, skipping...`,
-          percent: progressPercent
-        });
-        // Continue with next participant even if one fails
-        continue;
-      }
-
-      index++;
+      await Promise.all(promises);
+      global.gc?.(); // optional, if using Node with --expose-gc
+      await new Promise(r => setTimeout(r, 10));
     }
 
+    // ----------------
     // Finalize ZIP
-    sendProgress({
-      stage: "finalizing",
-      message: "Finalizing ZIP file...",
-      percent: 96
-    });
-
-    console.log("📦 Finalizing ZIP archive...");
-
-    // Handle archive finalization
+    // ----------------
+    sendProgress({ stage: "finalizing", task: "Finalizing ZIP", percent: 97 });
     archive.finalize();
 
-    // Wait for archive to complete
-    await new Promise((resolve, reject) => {
-      archive.on('end', resolve);
-      archive.on('error', reject);
+    archive.on("end", () => {
+      sendProgress({
+        stage: "completed",
+        task: "All certificates generated",
+        percent: 100,
+        total: processedCount,
+        log: `ZIP ready with ${processedCount} certificates`
+      });
+      console.log("🎉 Completed all certificates!");
     });
 
-    sendProgress({
-      stage: "completed",
-      percent: 100,
-      message: "All certificates generated and ZIP ready for download!",
-      total: processedCount
+    archive.on("error", (err) => {
+      sendProgress({ stage: "error", task: "Archive error", log: err.message });
+      console.error("🔥 Archive error:", err);
     });
-
-    console.log("🎉 ZIP generation completed successfully");
-    console.log(`✅ Generated ${processedCount} certificates`);
-    console.log("-----------------------------------------\n");
 
   } catch (err) {
-    console.error("🔥 ZIP Generation Error:", err);
-
-    sendProgress({
-      stage: "error",
-      message: "Generation failed: " + err.message
-    });
-
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Generation failed: " + err.message });
-    }
+    sendProgress({ stage: "error", task: "Fatal error", log: err.message });
+    console.error("💥 Fatal error:", err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
+
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
