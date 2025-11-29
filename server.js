@@ -273,6 +273,33 @@ app.post('/preview-pdf', async (req, res) => {
 });
 
 
+// --- SSE PROGRESS ENDPOINT ---
+app.get("/progress", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  console.log("📡 Client connected to progress stream");
+
+  global.sseClient = res;
+
+  res.write(`data: ${JSON.stringify({ status: "connected" })}\n\n`);
+
+  req.on("close", () => {
+    console.log("❌ Progress client disconnected");
+    global.sseClient = null;
+  });
+});
+
+
+function sendProgress(data) {
+  if (global.sseClient) {
+    global.sseClient.write(`data: ${JSON.stringify(data)}\n\n`);
+  }
+}
+
+
+
 // --- Generate ZIP with Live Progress for Frontend ---
 app.post('/generate', async (req, res) => {
   console.log("\n-----------------------------------------");
@@ -531,8 +558,6 @@ app.post('/generate', async (req, res) => {
     }
   }
 });
-
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
-
