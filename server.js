@@ -8,6 +8,7 @@ import http from 'http';
 import dotenv from 'dotenv';
 import fetch from "node-fetch"; // npm install node-fetch
 import path from 'path';
+import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
 
 import fontkit from '@pdf-lib/fontkit';
@@ -68,7 +69,7 @@ const port = 5000;
 
 
 
-app.use(express.json({ limit: '30mb' }));
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const upload = multer({
@@ -273,36 +274,13 @@ app.post('/preview-pdf', async (req, res) => {
 });
 
 
-// --- SSE PROGRESS ENDPOINT ---
-app.get("/progress", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  console.log("📡 Client connected to progress stream");
-
-  global.sseClient = res;
-
-  res.write(`data: ${JSON.stringify({ status: "connected" })}\n\n`);
-
-  req.on("close", () => {
-    console.log("❌ Progress client disconnected");
-    global.sseClient = null;
-  });
-});
-
-
-function sendProgress(data) {
-  if (global.sseClient) {
-    global.sseClient.write(`data: ${JSON.stringify(data)}\n\n`);
-  }
-}
-
-
 // -------------------
 // SSE Progress Store
 // -------------------
 let clients = [];
+function sendProgress(data) {
+  clients.forEach(c => c.write(`data: ${JSON.stringify(data)}\n\n`));
+}
 
 app.get("/progress", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -311,14 +289,10 @@ app.get("/progress", (req, res) => {
   res.flushHeaders();
 
   clients.push(res);
-
   req.on("close", () => {
     clients = clients.filter(c => c !== res);
   });
 });
-
-
-
 
 // -------------------
 // Ultra-Scale ZIP Generation
@@ -349,7 +323,8 @@ app.post("/generate", async (req, res) => {
     let templateBuffer = null;
     if (templateUrl) {
       try {
-        templateBuffer = await getBufferFromUrl(templateUrl);
+        const response = await fetch(templateUrl);
+        templateBuffer = Buffer.from(await response.arrayBuffer());
         sendProgress({ stage: "template", task: "Template loaded" });
       } catch (e) {
         sendProgress({ stage: "template", task: "Template failed, continuing without image" });
@@ -359,15 +334,16 @@ app.post("/generate", async (req, res) => {
     // ----------------
     // Load Font Once
     // ----------------
-    const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-    const fontBytes = await (await fetch(fontUrl)).arrayBuffer();
+    const fontUrl =
+      "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+    const fontBytes = Buffer.from(await (await fetch(fontUrl)).arrayBuffer());
 
     sendProgress({ stage: "start", task: "Starting generation", percent: 0, total, current: 0 });
 
     // ----------------
     // Batch Processing
     // ----------------
-    const BATCH_SIZE = 200; // adjustable based on RAM
+    const BATCH_SIZE = 200; // adjustable
     const batches = Math.ceil(total / BATCH_SIZE);
 
     for (let b = 0; b < batches; b++) {
@@ -377,7 +353,8 @@ app.post("/generate", async (req, res) => {
 
       sendProgress({ stage: "batch", task: `Processing batch ${b + 1}/${batches}` });
 
-      const promises = batch.map(async (p, i) => {
+      for (let i = 0; i < batch.length; i++) {
+        const p = batch[i];
         const index = start + i + 1;
         try {
           const pdfDoc = await PDFDocument.create();
@@ -414,12 +391,16 @@ app.post("/generate", async (req, res) => {
               y: 400 - f.y - f.size,
               size: f.size,
               font: customFont,
-              color: rgb(r, g, b2)
+              color: rgb(r, g, b2),
             });
           }
 
           const pdfBytes = await pdfDoc.save();
-          const safeName = (p.name || p.Name || `user_${index}`).replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
+          const safeName = (p.name || p.Name || `user_${index}`)
+            .replace(/[^a-z0-9_-]/gi, "_")
+            .toLowerCase();
+
+          // ✅ Append PDF as stream — no temp file
           archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
 
           processedCount++;
@@ -431,24 +412,27 @@ app.post("/generate", async (req, res) => {
               total,
               percent: Math.round((processedCount / total) * 90),
               name: p.name,
-              log: `Processed ${processedCount}/${total}: ${p.name || safeName}`
+              log: `Processed ${processedCount}/${total}: ${p.name || safeName}`,
             });
           }
         } catch (e) {
-          sendProgress({ stage: "processing", task: "Error generating certificate", log: e.message });
+          sendProgress({
+            stage: "processing",
+            task: "Error generating certificate",
+            log: e.message,
+          });
         }
-      });
+      }
 
-      await Promise.all(promises);
-      global.gc?.(); // optional, if using Node with --expose-gc
-      await new Promise(r => setTimeout(r, 10));
+      global.gc?.();
+      await new Promise((r) => setTimeout(r, 10));
     }
 
     // ----------------
     // Finalize ZIP
     // ----------------
     sendProgress({ stage: "finalizing", task: "Finalizing ZIP", percent: 97 });
-    archive.finalize();
+    await archive.finalize();
 
     archive.on("end", () => {
       sendProgress({
@@ -456,7 +440,7 @@ app.post("/generate", async (req, res) => {
         task: "All certificates generated",
         percent: 100,
         total: processedCount,
-        log: `ZIP ready with ${processedCount} certificates`
+        log: `ZIP ready with ${processedCount} certificates`,
       });
       console.log("🎉 Completed all certificates!");
     });
@@ -465,7 +449,6 @@ app.post("/generate", async (req, res) => {
       sendProgress({ stage: "error", task: "Archive error", log: err.message });
       console.error("🔥 Archive error:", err);
     });
-
   } catch (err) {
     sendProgress({ stage: "error", task: "Fatal error", log: err.message });
     console.error("💥 Fatal error:", err);
