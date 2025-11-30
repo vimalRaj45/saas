@@ -385,38 +385,31 @@ app.get("/download", (req, res) => {
 });
 
 // ----------------------
-// Main generation handler (optimized + RAM tracking)
+// Main generation handler (optimized for low memory, 10k+ certs)
 // ----------------------
 async function generateHandler(req, key, zipPath) {
   console.log(`🚀 Starting generation for key: ${key}`);
   stopRequested = false;
-
-  let { participants, templateUrl, fields } = req.body;
+  const { participants, templateUrl, fields } = req.body;
   const total = participants?.length || 0;
   let processedCount = 0;
 
   zipStore[key] = zipPath;
 
-  sendProgress(key, {
-    stage: "started",
-    task: "Generating certificates",
-    current: 0,
-    total,
-    percent: 0
-  });
+  sendProgress(key, { stage: "started", task: "Generating certificates", current: 0, total, percent: 0 });
 
   // -------------------------------
   // Stream ZIP to disk
   const archive = archiver("zip", { zlib: { level: 9 } });
   const output = fs.createWriteStream(zipPath);
 
-  archive.on("warning", (err) => {
-    if (err.code === "ENOENT") console.warn("Archive warning:", err);
+  archive.on('warning', (err) => {
+    if (err.code === 'ENOENT') console.warn('Archive warning:', err);
     else throw err;
   });
 
-  archive.on("error", (err) => {
-    console.error("Archive error:", err);
+  archive.on('error', (err) => {
+    console.error('Archive error:', err);
     sendProgress(key, { stage: "error", task: "Archive creation failed" });
   });
 
@@ -436,8 +429,7 @@ async function generateHandler(req, key, zipPath) {
 
   // -------------------------------
   // Load font
-  const fontUrl =
-    "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+  const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
   let fontBytes;
   try {
     const fontResponse = await fetch(fontUrl);
@@ -450,7 +442,7 @@ async function generateHandler(req, key, zipPath) {
 
   // -------------------------------
   // Batch processing
-  const BATCH_SIZE = 8;
+  const BATCH_SIZE = 7;
 
   for (let start = 0; start < total; start += BATCH_SIZE) {
     const batch = participants.slice(start, start + BATCH_SIZE);
@@ -464,98 +456,115 @@ async function generateHandler(req, key, zipPath) {
       const p = batch[i];
 
       try {
-        let pdfDoc = await PDFDocument.create();
+        const pdfDoc = await PDFDocument.create();
         pdfDoc.registerFontkit(fontkit);
         const customFont = await pdfDoc.embedFont(fontBytes);
         const page = pdfDoc.addPage([600, 400]);
 
-        // TEMPLATE
         if (templateBuffer) {
           try {
             const img = templateUrl.toLowerCase().endsWith(".png")
               ? await pdfDoc.embedPng(templateBuffer)
               : await pdfDoc.embedJpg(templateBuffer);
-
             page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
           } catch (imgErr) {
             console.warn("Template embedding failed:", imgErr);
           }
         }
 
-        // TEXT FIELDS
         for (const f of fields) {
           const value = (p[f.field] || "").toString().trim();
           if (!value) continue;
-
-          const hex = (f.color || "#000000")
-            .replace("#", "")
-            .padEnd(6, "0")
-            .slice(0, 6);
-
+          const hex = (f.color || "#000000").replace("#", "").padEnd(6, "0").slice(0, 6);
           const r = parseInt(hex.substring(0, 2), 16) / 255;
           const g = parseInt(hex.substring(2, 4), 16) / 255;
           const b = parseInt(hex.substring(4, 6), 16) / 255;
-
-          page.drawText(value, {
-            x: f.x,
-            y: 400 - f.y - f.size,
-            size: f.size,
-            font: customFont,
-            color: rgb(r, g, b)
-          });
+          page.drawText(value, { x: f.x, y: 400 - f.y - f.size, size: f.size, font: customFont, color: rgb(r, g, b) });
         }
 
-        let pdfBytes = await pdfDoc.save();
+        const pdfBytes = await pdfDoc.save();
+        const safeName = (p.name || `user_${start + i + 1}`).replace(/[^a-z0-9_.-]/gi, "_").toLowerCase();
+        archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
 
-        const safeName = (p.name || `user_${start + i + 1}`)
-          .replace(/[^a-z0-9_.-]/gi, "_")
-          .toLowerCase();
+        processedCount++;
+        const percent = Math.round((processedCount / total) * 100);
 
-        // append to ZIP
-        if (pdfBytes && pdfBytes.length > 0) {
-          archive.append(pdfBytes, { name: `${safeName}.pdf` });
-        } else {
-          console.log("⚠️ Skipped empty PDF for", safeName);
-        }
+        // ====== 🧠 RAM TRACKER (per certificate) ======
+        const ram = process.memoryUsage();
+        const usedMB = (ram.rss / 1024 / 1024).toFixed(1);
+        const heapMB = (ram.heapUsed / 1024 / 1024).toFixed(1);
+
+        sendProgress(key, {
+          stage: "processing",
+          task: "Generating certificates",
+          current: processedCount,
+          total,
+          percent,
+          name: p.name || `Participant ${start + i + 1}`,
+          ramUsedMB: usedMB,
+          heapUsedMB: heapMB,
+          ramLimitMB: 512
+        });
+        // ==============================================
+
       } catch (err) {
-        console.error("Error processing participant", p.name, err);
+        console.error(`Error processing participant ${start + i}:`, err);
       }
-
-      processedCount++;
-
-      // -------------------------------
-      // 💾 RAM Tracking
-      const used = process.memoryUsage().rss / 1024 / 1024; // MB
-      const max = 512; // your limit
-      const percent = ((used / max) * 100).toFixed(1);
-
-      console.log(`💾 RAM: ${used.toFixed(2)} MB / ${max} MB (${percent}%)`);
-
-      // send progress WITH RAM usage
-      sendProgress(key, {
-        stage: "processing",
-        task: "Generating certificates",
-        current: processedCount,
-        total,
-        percent: Math.round((processedCount / total) * 100),
-        ram: `${used.toFixed(2)} MB / ${max} MB`
-      });
     }
+
+    // ====== 🧠 RAM TRACKER (per batch) ======
+    const ram = process.memoryUsage();
+    console.log(`🧠 RAM after batch: ${(ram.rss/1024/1024).toFixed(1)} MB used of 512 MB`);
+    // ========================================
+
+    await new Promise(r => setTimeout(r, 20));
   }
 
   // -------------------------------
   // Finalize ZIP
-  archive.finalize();
-
-  archive.on("finish", () => {
-    console.log("🎉 ZIP generation complete:", zipPath);
-
-    sendProgress(key, {
-      stage: "completed",
-      task: "ZIP ready",
-      ram: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB / 512 MB`
+  try {
+    await archive.finalize();
+    await new Promise((resolve, reject) => {
+      output.on('close', () => {
+        console.log(`✅ Archive finalized for key: ${key}, ${archive.pointer()} total bytes`);
+        resolve();
+      });
+      output.on('error', reject);
     });
-  });
+
+    // ====== 🧠 FINAL RAM LOG ======
+    const ram = process.memoryUsage();
+    console.log(`🏁 FINAL RAM USAGE: ${(ram.rss/1024/1024).toFixed(1)} MB / 512 MB`);
+    sendProgress(key, {
+      stage: stopRequested ? "cancelled" : "completed",
+      task: stopRequested ? "Generation cancelled" : "All certificates generated",
+      current: processedCount,
+      total,
+      percent: stopRequested ? Math.round((processedCount/total)*100) : 100,
+      downloadUrl: stopRequested ? null : `/download?key=${key}`,
+      finalRamMB: (ram.rss/1024/1024).toFixed(1),
+      heapRamMB: (ram.heapUsed/1024/1024).toFixed(1),
+      ramLimitMB: 512
+    });
+    // =================================
+
+  } catch (err) {
+    console.error("Archive finalization error:", err);
+    sendProgress(key, { stage: "error", task: "Archive creation failed" });
+  }
+
+  isGenerating = false;
+  currentGenerationStartTime = null;
+  currentGenerationTotal = 0;
+
+  if (queue.length > 0 && !stopRequested) {
+    const next = queue.shift();
+    console.log(`➡️ Starting next in queue: ${next.key}`);
+    setTimeout(() => {
+      const nextZipPath = path.join(__dirname, `temp_${next.key}.zip`);
+      generateHandler(next.req, next.key, nextZipPath);
+    }, 1000);
+  }
 }
 
 
