@@ -2214,12 +2214,16 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
             a.click();
             document.body.removeChild(a);
             
-            Swal.fire({
-              icon: "success",
-              title: "Completed!",
-              text: "Certificates downloaded successfully!",
-              confirmButtonColor: "#28a745"
-            });
+           Swal.fire({
+  icon: "success",
+  title: "Completed!",
+  html: `
+    We are preparing your certificate ZIP file.<br>
+    Thank you for choosing us! 🤝
+  `,
+  confirmButtonColor: "#28a745"
+});
+
           }, 1000);
         }
       }
@@ -2708,6 +2712,5 @@ document.addEventListener('keydown',(e)=>{
 </script>
 </body>
 </html>
-
 
 
