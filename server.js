@@ -482,7 +482,7 @@ async function generateHandler(req, key, zipPath) {
 
   // -------------------------------
   // Process batches
-  const BATCH_SIZE = 5;
+  const BATCH_SIZE = 3;
 
   for (let start = 0; start < total; start += BATCH_SIZE) {
     const batch = participants.slice(start, start + BATCH_SIZE);
@@ -630,3 +630,4 @@ app.post("/cleanup", (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
+
