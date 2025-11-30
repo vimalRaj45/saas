@@ -416,24 +416,49 @@ async function generateHandler(req, key, zipPath) {
   archive.pipe(output);
 
   // -------------------------------
-  // Load template
-  let templateBuffer = null;
-  if (templateUrl) {
-    try {
-      const response = await fetch(templateUrl);
-      templateBuffer = Buffer.from(await response.arrayBuffer());
-    } catch (err) {
-      console.error("Template loading error:", err);
+  // Load template (once) and convert image -> PDF if needed
+  let baseTemplate = null; // PDFDocument instance loaded once
+  try {
+    if (templateUrl) {
+      const resp = await fetch(templateUrl);
+      const buf = Buffer.from(await resp.arrayBuffer());
+
+      // Detect PDF vs image by header bytes
+      const isPdf = buf.slice(0, 4).toString() === '%PDF';
+      if (isPdf) {
+        baseTemplate = await PDFDocument.load(buf);
+      } else {
+        // convert single image into a one-page PDF and load as baseTemplate
+        const tmpPdf = await PDFDocument.create();
+        // register fontkit only when needed for text later, don't call here
+        if (templateUrl.toLowerCase().endsWith('.png')) {
+          const img = await tmpPdf.embedPng(buf);
+          const page = tmpPdf.addPage([img.width, img.height]);
+          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        } else {
+          const img = await tmpPdf.embedJpg(buf);
+          const page = tmpPdf.addPage([img.width, img.height]);
+          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        }
+        const tmpBytes = await tmpPdf.save();
+        // free tmpPdf references immediately
+        // load the bytes as baseTemplate for efficient copyPages later
+        baseTemplate = await PDFDocument.load(tmpBytes);
+      }
+      // We no longer need raw buffer variable in memory
     }
+  } catch (err) {
+    console.error("Template loading/conversion error:", err);
+    // continue without template (we still allow generation)
   }
 
   // -------------------------------
-  // Load font
+  // Load font bytes once (we'll embed into each new PDF per participant)
   const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
-  let fontBytes;
+  let fontBytes = null;
   try {
-    const fontResponse = await fetch(fontUrl);
-    fontBytes = Buffer.from(await fontResponse.arrayBuffer());
+    const fontResp = await fetch(fontUrl);
+    fontBytes = Buffer.from(await fontResp.arrayBuffer());
   } catch (err) {
     console.error("Font loading error:", err);
     sendProgress(key, { stage: "error", task: "Font loading failed" });
@@ -441,8 +466,8 @@ async function generateHandler(req, key, zipPath) {
   }
 
   // -------------------------------
-  // Batch processing
-  const BATCH_SIZE = 7;
+  // Batch processing (tune BATCH_SIZE according to memory profile)
+  const BATCH_SIZE = 6;
 
   for (let start = 0; start < total; start += BATCH_SIZE) {
     const batch = participants.slice(start, start + BATCH_SIZE);
@@ -456,21 +481,26 @@ async function generateHandler(req, key, zipPath) {
       const p = batch[i];
 
       try {
-        const pdfDoc = await PDFDocument.create();
+        // Create a new PDF and copy pages from baseTemplate (if exists)
+        let pdfDoc;
+        if (baseTemplate) {
+          pdfDoc = await PDFDocument.create();
+          // copy all pages (or just first page) - choose first page by default
+          const copiedPages = await pdfDoc.copyPages(baseTemplate, baseTemplate.getPageIndices());
+          copiedPages.forEach(pg => pdfDoc.addPage(pg));
+        } else {
+          // No template: create a fresh page with default size (600x400)
+          pdfDoc = await PDFDocument.create();
+          pdfDoc.addPage([600, 400]);
+        }
+
+        // Register fontkit + embed font inside this PDF (required for drawText)
         pdfDoc.registerFontkit(fontkit);
         const customFont = await pdfDoc.embedFont(fontBytes);
-        const page = pdfDoc.addPage([600, 400]);
 
-        if (templateBuffer) {
-          try {
-            const img = templateUrl.toLowerCase().endsWith(".png")
-              ? await pdfDoc.embedPng(templateBuffer)
-              : await pdfDoc.embedJpg(templateBuffer);
-            page.drawImage(img, { x: 0, y: 0, width: 600, height: 400 });
-          } catch (imgErr) {
-            console.warn("Template embedding failed:", imgErr);
-          }
-        }
+        // Draw text fields on the first page (or iterate pages if you want)
+        const page = pdfDoc.getPage(0);
+        const pageHeight = page.getSize().height;
 
         for (const f of fields) {
           const value = (p[f.field] || "").toString().trim();
@@ -479,11 +509,23 @@ async function generateHandler(req, key, zipPath) {
           const r = parseInt(hex.substring(0, 2), 16) / 255;
           const g = parseInt(hex.substring(2, 4), 16) / 255;
           const b = parseInt(hex.substring(4, 6), 16) / 255;
-          page.drawText(value, { x: f.x, y: 400 - f.y - f.size, size: f.size, font: customFont, color: rgb(r, g, b) });
+          page.drawText(value, {
+            x: f.x,
+            y: pageHeight - f.y - f.size,
+            size: f.size,
+            font: customFont,
+            color: rgb(r, g, b)
+          });
         }
 
         const pdfBytes = await pdfDoc.save();
+
+        // release references asap
+        // (help GC by nulling large objects)
+        pdfDoc = null;
+
         const safeName = (p.name || `user_${start + i + 1}`).replace(/[^a-z0-9_.-]/gi, "_").toLowerCase();
+        // append to archive as a Buffer (archiver will stream to disk)
         archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
 
         processedCount++;
@@ -517,13 +559,18 @@ async function generateHandler(req, key, zipPath) {
     console.log(`🧠 RAM after batch: ${(ram.rss/1024/1024).toFixed(1)} MB used of 512 MB`);
     // ========================================
 
+    // Gentle pause to give Node event loop a chance to free memory
     await new Promise(r => setTimeout(r, 20));
+
+    // Optionally force garbage collection if available (helps on constrained hosts)
+    try { if (typeof global.gc === "function") { global.gc(); } } catch (e) { /* no-op */ }
   }
 
   // -------------------------------
   // Finalize ZIP
   try {
     await archive.finalize();
+
     await new Promise((resolve, reject) => {
       output.on('close', () => {
         console.log(`✅ Archive finalized for key: ${key}, ${archive.pointer()} total bytes`);
@@ -553,6 +600,11 @@ async function generateHandler(req, key, zipPath) {
     sendProgress(key, { stage: "error", task: "Archive creation failed" });
   }
 
+  // free big persistent objects
+  baseTemplate = null;
+  fontBytes = null;
+  try { if (typeof global.gc === "function") global.gc(); } catch (e) { /* ignore */ }
+
   isGenerating = false;
   currentGenerationStartTime = null;
   currentGenerationTotal = 0;
@@ -566,6 +618,7 @@ async function generateHandler(req, key, zipPath) {
     }, 1000);
   }
 }
+
 
 
 // Add cleanup endpoint
