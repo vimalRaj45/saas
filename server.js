@@ -274,14 +274,23 @@ app.get("/progress", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
+  // send an initial comment to establish the connection immediately (helps some proxies)
+  // comments start with ':' and are ignored by SSE parsers, but keep connection alive
+  res.write(': connected\n\n');
+
   const clientId = Date.now() + Math.random();
   const newClient = { id: clientId, key, res };
   clients.push(newClient);
 
+  // debug log
+  console.log(`➕ SSE client ${clientId} connected for key=${key} (total clients: ${clients.length})`);
+
   req.on("close", () => {
     clients = clients.filter(c => c.id !== clientId);
+    console.log(`➖ SSE client ${clientId} disconnected for key=${key} (remaining: ${clients.length})`);
   });
 });
+
 
 function sendProgress(key, data) {
   clients.forEach(client => {
@@ -385,185 +394,177 @@ app.get("/download", (req, res) => {
 });
 
 // ----------------------
-// Main generation handler (optimized for low memory, 10k+ certs)
+// Main generation handler (optimized + fixed SSE disconnect)
 // ----------------------
 async function generateHandler(req, key, zipPath) {
   console.log(`🚀 Starting generation for key: ${key}`);
   stopRequested = false;
+
   const { participants, templateUrl, fields } = req.body;
   const total = participants?.length || 0;
   let processedCount = 0;
 
+  // store zip path
   zipStore[key] = zipPath;
 
-  sendProgress(key, { stage: "started", task: "Generating certificates", current: 0, total, percent: 0 });
+  // initial progress
+  sendProgress(key, { 
+    stage: "started", 
+    task: "Generating certificates",
+    current: 0,
+    total,
+    percent: 0 
+  });
 
   // -------------------------------
-  // Stream ZIP to disk
+  // Create ZIP stream
   const archive = archiver("zip", { zlib: { level: 9 } });
   const output = fs.createWriteStream(zipPath);
 
-  archive.on('warning', (err) => {
-    if (err.code === 'ENOENT') console.warn('Archive warning:', err);
+  archive.on("warning", err => {
+    if (err.code === "ENOENT") console.warn("Archive warning:", err);
     else throw err;
   });
 
-  archive.on('error', (err) => {
-    console.error('Archive error:', err);
+  archive.on("error", err => {
+    console.error("Archive error:", err);
     sendProgress(key, { stage: "error", task: "Archive creation failed" });
   });
 
   archive.pipe(output);
 
   // -------------------------------
-  // Load template (once) and convert image -> PDF if needed
-  let baseTemplate = null; // PDFDocument instance loaded once
+  // SSE HEARTBEAT FIX (every 3 sec)
+  let heartbeat = setInterval(() => {
+    sendProgress(key, { type: "ping", ts: Date.now() });
+  }, 3000);
+
+  // -------------------------------
+  // Load PDF template
+  let baseTemplate = null;
   try {
     if (templateUrl) {
       const resp = await fetch(templateUrl);
       const buf = Buffer.from(await resp.arrayBuffer());
+      const isPdf = buf.slice(0, 4).toString() === "%PDF";
 
-      // Detect PDF vs image by header bytes
-      const isPdf = buf.slice(0, 4).toString() === '%PDF';
       if (isPdf) {
         baseTemplate = await PDFDocument.load(buf);
       } else {
-        // convert single image into a one-page PDF and load as baseTemplate
         const tmpPdf = await PDFDocument.create();
-        // register fontkit only when needed for text later, don't call here
-        if (templateUrl.toLowerCase().endsWith('.png')) {
-          const img = await tmpPdf.embedPng(buf);
-          const page = tmpPdf.addPage([img.width, img.height]);
-          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
-        } else {
-          const img = await tmpPdf.embedJpg(buf);
-          const page = tmpPdf.addPage([img.width, img.height]);
-          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
-        }
-        const tmpBytes = await tmpPdf.save();
-        // free tmpPdf references immediately
-        // load the bytes as baseTemplate for efficient copyPages later
-        baseTemplate = await PDFDocument.load(tmpBytes);
+        const img = templateUrl.toLowerCase().endsWith(".png")
+          ? await tmpPdf.embedPng(buf)
+          : await tmpPdf.embedJpg(buf);
+
+        const page = tmpPdf.addPage([img.width, img.height]);
+        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+
+        baseTemplate = await PDFDocument.load(await tmpPdf.save());
       }
-      // We no longer need raw buffer variable in memory
     }
   } catch (err) {
-    console.error("Template loading/conversion error:", err);
-    // continue without template (we still allow generation)
+    console.error("Template load error:", err);
   }
 
   // -------------------------------
-  // Load font bytes once (we'll embed into each new PDF per participant)
-  const fontUrl = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf";
+  // Load font
   let fontBytes = null;
   try {
-    const fontResp = await fetch(fontUrl);
+    const fontResp = await fetch(
+      "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf"
+    );
     fontBytes = Buffer.from(await fontResp.arrayBuffer());
   } catch (err) {
-    console.error("Font loading error:", err);
+    console.error("Font load error:", err);
     sendProgress(key, { stage: "error", task: "Font loading failed" });
     return;
   }
 
   // -------------------------------
-  // Batch processing (tune BATCH_SIZE according to memory profile)
-  const BATCH_SIZE = 6;
+  // Process batches
+  const BATCH_SIZE = 5;
 
   for (let start = 0; start < total; start += BATCH_SIZE) {
     const batch = participants.slice(start, start + BATCH_SIZE);
 
     for (let i = 0; i < batch.length; i++) {
-      if (stopRequested) {
-        console.log(`⏹️ Generation stopped for key: ${key}`);
-        break;
-      }
+      if (stopRequested) break;
 
       const p = batch[i];
 
       try {
-        // Create a new PDF and copy pages from baseTemplate (if exists)
+        // Prepare PDF
         let pdfDoc;
         if (baseTemplate) {
           pdfDoc = await PDFDocument.create();
-          // copy all pages (or just first page) - choose first page by default
-          const copiedPages = await pdfDoc.copyPages(baseTemplate, baseTemplate.getPageIndices());
-          copiedPages.forEach(pg => pdfDoc.addPage(pg));
+          const pg = await pdfDoc.copyPages(baseTemplate, [0]);
+          pdfDoc.addPage(pg[0]);
         } else {
-          // No template: create a fresh page with default size (600x400)
           pdfDoc = await PDFDocument.create();
           pdfDoc.addPage([600, 400]);
         }
 
-        // Register fontkit + embed font inside this PDF (required for drawText)
+        // font
         pdfDoc.registerFontkit(fontkit);
         const customFont = await pdfDoc.embedFont(fontBytes);
 
-        // Draw text fields on the first page (or iterate pages if you want)
         const page = pdfDoc.getPage(0);
         const pageHeight = page.getSize().height;
 
+        // draw fields
         for (const f of fields) {
           const value = (p[f.field] || "").toString().trim();
           if (!value) continue;
-          const hex = (f.color || "#000000").replace("#", "").padEnd(6, "0").slice(0, 6);
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+          const hex = f.color.replace("#", "");
+          const r = parseInt(hex.slice(0, 2), 16) / 255;
+          const g = parseInt(hex.slice(2, 4), 16) / 255;
+          const b = parseInt(hex.slice(4, 6), 16) / 255;
+
           page.drawText(value, {
             x: f.x,
             y: pageHeight - f.y - f.size,
             size: f.size,
             font: customFont,
-            color: rgb(r, g, b)
+            color: rgb(r, g, b),
           });
         }
 
         const pdfBytes = await pdfDoc.save();
 
-        // release references asap
-        // (help GC by nulling large objects)
-        pdfDoc = null;
+        const safeName = (p.name || `user_${start + i + 1}`)
+          .replace(/[^a-z0-9_.-]/gi, "_")
+          .toLowerCase();
 
-        const safeName = (p.name || `user_${start + i + 1}`).replace(/[^a-z0-9_.-]/gi, "_").toLowerCase();
-        // append to archive as a Buffer (archiver will stream to disk)
         archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
 
         processedCount++;
         const percent = Math.round((processedCount / total) * 100);
 
-        // ====== 🧠 RAM TRACKER (per certificate) ======
+        // RAM LOG
         const ram = process.memoryUsage();
-        const usedMB = (ram.rss / 1024 / 1024).toFixed(1);
-        const heapMB = (ram.heapUsed / 1024 / 1024).toFixed(1);
-
         sendProgress(key, {
           stage: "processing",
           task: "Generating certificates",
           current: processedCount,
           total,
           percent,
-          name: p.name || `Participant ${start + i + 1}`,
-          ramUsedMB: usedMB,
-          heapUsedMB: heapMB,
+          name: p.name,
+          ramUsedMB: (ram.rss / 1024 / 1024).toFixed(1),
           ramLimitMB: 512
         });
-        // ==============================================
 
       } catch (err) {
-        console.error(`Error processing participant ${start + i}:`, err);
+        console.error(`Error processing ${start + i}:`, err);
       }
     }
 
-    // ====== 🧠 RAM TRACKER (per batch) ======
+    // batch RAM log
     const ram = process.memoryUsage();
     console.log(`🧠 RAM after batch: ${(ram.rss/1024/1024).toFixed(1)} MB used of 512 MB`);
-    // ========================================
 
-    // Gentle pause to give Node event loop a chance to free memory
     await new Promise(r => setTimeout(r, 20));
-
-    // Optionally force garbage collection if available (helps on constrained hosts)
-    try { if (typeof global.gc === "function") { global.gc(); } } catch (e) { /* no-op */ }
+    if (global.gc) global.gc();
   }
 
   // -------------------------------
@@ -572,50 +573,41 @@ async function generateHandler(req, key, zipPath) {
     await archive.finalize();
 
     await new Promise((resolve, reject) => {
-      output.on('close', () => {
-        console.log(`✅ Archive finalized for key: ${key}, ${archive.pointer()} total bytes`);
-        resolve();
-      });
-      output.on('error', reject);
+      output.on("close", resolve);
+      output.on("error", reject);
     });
 
-    // ====== 🧠 FINAL RAM LOG ======
     const ram = process.memoryUsage();
-    console.log(`🏁 FINAL RAM USAGE: ${(ram.rss/1024/1024).toFixed(1)} MB / 512 MB`);
+
     sendProgress(key, {
       stage: stopRequested ? "cancelled" : "completed",
-      task: stopRequested ? "Generation cancelled" : "All certificates generated",
+      task: stopRequested ? "Cancelled" : "All certificates generated",
       current: processedCount,
       total,
-      percent: stopRequested ? Math.round((processedCount/total)*100) : 100,
+      percent: stopRequested ? Math.round(processedCount / total * 100) : 100,
       downloadUrl: stopRequested ? null : `/download?key=${key}`,
       finalRamMB: (ram.rss/1024/1024).toFixed(1),
-      heapRamMB: (ram.heapUsed/1024/1024).toFixed(1),
       ramLimitMB: 512
     });
-    // =================================
 
   } catch (err) {
-    console.error("Archive finalization error:", err);
-    sendProgress(key, { stage: "error", task: "Archive creation failed" });
+    console.error("Finalize error:", err);
+    sendProgress(key, { stage: "error", task: "ZIP finalize failed" });
   }
 
-  // free big persistent objects
+  // cleanup
+  clearInterval(heartbeat);
   baseTemplate = null;
   fontBytes = null;
-  try { if (typeof global.gc === "function") global.gc(); } catch (e) { /* ignore */ }
+  if (global.gc) global.gc();
 
   isGenerating = false;
-  currentGenerationStartTime = null;
-  currentGenerationTotal = 0;
 
+  // queue next job
   if (queue.length > 0 && !stopRequested) {
     const next = queue.shift();
-    console.log(`➡️ Starting next in queue: ${next.key}`);
-    setTimeout(() => {
-      const nextZipPath = path.join(__dirname, `temp_${next.key}.zip`);
-      generateHandler(next.req, next.key, nextZipPath);
-    }, 1000);
+    const nextZip = path.join(__dirname, `temp_${next.key}.zip`);
+    setTimeout(() => generateHandler(next.req, next.key, nextZip), 1000);
   }
 }
 
