@@ -2258,13 +2258,84 @@ document.getElementById("generateBtn").addEventListener("click", async () => {
       }
     };
 
-    window.currentEventSource.onerror = function(err) {
-      addToLog("⚠️ SSE connection error");
-      if (window.currentEventSource) {
-        window.currentEventSource.close();
-        window.currentEventSource = null;
+   window.currentEventSource.onerror = async function(err) {
+  addToLog("⚠️ SSE connection lost, attempting recovery…");
+
+  if (window.currentEventSource) {
+    window.currentEventSource.close();
+    window.currentEventSource = null;
+  }
+
+  // Try recovery: check if backend finished the ZIP
+  try {
+    const key = localStorage.getItem("GEN_KEY");
+    const statusRes = await fetch(`/status?key=${key}`);
+    if (statusRes.ok) {
+      const status = await statusRes.json();
+
+      // If backend says completed → download
+      if (status.completed && status.downloadUrl) {
+        addToLog("🟢 Backend confirms ZIP is ready! Auto-downloading…");
+
+        const a = document.createElement("a");
+        a.href = status.downloadUrl;
+        a.download = `certificates_${key}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        Swal.fire({
+          icon: "success",
+          title: "Completed!",
+          html: `
+            Your certificate ZIP file is ready.<br>
+            Thank you for choosing us! 🤝
+          `,
+          confirmButtonColor: "#28a745"
+        });
+
+        return;
       }
-    };
+    }
+
+    // If backend did not finish yet → keep checking until done
+    addToLog("⏳ ZIP still processing… will auto-download when ready.");
+
+    const recoveryInterval = setInterval(async () => {
+      const r = await fetch(`/status?key=${key}`);
+      if (!r.ok) return;
+
+      const s = await r.json();
+
+      if (s.completed && s.downloadUrl) {
+        clearInterval(recoveryInterval);
+
+        addToLog("🟢 ZIP is now ready! Downloading…");
+
+        const a = document.createElement("a");
+        a.href = s.downloadUrl;
+        a.download = `certificates_${key}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        Swal.fire({
+          icon: "success",
+          title: "Completed!",
+          html: `
+            Your certificate ZIP file is ready.<br>
+            Thank you for choosing us! 🤝
+          `,
+          confirmButtonColor: "#28a745"
+        });
+      }
+    }, 3000); // check every 3 seconds
+
+  } catch (e) {
+    addToLog("❌ Error during recovery: " + e.message);
+  }
+};
+
 
     // Fallback: Wait for completion with timeout
     await new Promise((resolve, reject) => {
@@ -2463,7 +2534,8 @@ function manualDownload() {
     align-items: center;
     justify-content: space-between;
   ">
-    <span>Click to see exclusive MVP benefits</span>
+    <span>Click to 
+    exclusive MVP benefits</span>
     <button id="closeTooltip" style="
         background: none;
         border: none;
