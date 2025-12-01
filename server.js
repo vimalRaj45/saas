@@ -333,6 +333,9 @@ app.post("/stop-generate", (req, res) => {
 // ----------------------
 // Generate endpoint
 // ----------------------
+// ----------------------
+// Generate endpoint
+// ----------------------
 app.post("/generate", async (req, res) => {
   const generationKey = "gen_" + Date.now() + "_" + Math.random().toString(36).substring(2,10);
   req.generationKey = generationKey;
@@ -362,46 +365,40 @@ app.post("/generate", async (req, res) => {
   zipStore[generationKey] = zipPath;
 });
 
-// Update the download endpoint to show partial info:
+// ----------------------
+// Download endpoint
+// ----------------------
 app.get("/download", (req, res) => {
   const key = req.query.key;
   if (!key) return res.status(400).send("Missing key");
 
-  const fileInfo = zipStore[key];
-  if (!fileInfo || !fs.existsSync(fileInfo.zipPath)) {
+  const filePath = zipStore[key];
+  console.log(`📥 Download request for key: ${key}, path: ${filePath}`);
+  
+  if (!filePath || !fs.existsSync(filePath)) {
+    console.log(`❌ ZIP not found for key: ${key}`);
     return res.status(404).send("ZIP not found or expired. Please generate again.");
   }
 
-  // Customize filename based on completion status
-  const status = fileInfo.completed || "unknown";
-  const filename = status === "partial" 
-    ? `certificates_partial_${key}.zip` 
-    : `certificates_${key}.zip`;
-
-  res.download(fileInfo.zipPath, filename, err => {
+  res.download(filePath, `certificates_${key}.zip`, err => {
     if (err) {
       console.error("Download error:", err);
     }
-    // Delayed cleanup
+    // Don't delete immediately - give time for download to complete
     setTimeout(() => {
-      if (fs.existsSync(fileInfo.zipPath)) {
-        fs.unlink(fileInfo.zipPath, () => {
-          // Clean up temp directory if exists
-          if (fileInfo.tempDir && fs.existsSync(fileInfo.tempDir)) {
-            fs.rmSync(fileInfo.tempDir, { recursive: true, force: true });
-          }
+      if (fs.existsSync(filePath)) {
+        fs.unlink(filePath, () => {
           delete zipStore[key];
-          console.log(`🧹 Cleaned up all files for key: ${key}`);
+          console.log(`🧹 Cleaned up ZIP for key: ${key}`);
         });
       }
-    }, 30000);
+    }, 30000); // 30 second delay before cleanup
   });
 });
 
 // ----------------------
 // Main generation handler (optimized + fixed SSE disconnect)
 // ----------------------
-// Update the generateHandler function to save incremental ZIP files
 async function generateHandler(req, key, zipPath) {
   console.log(`🚀 Starting generation for key: ${key}`);
   stopRequested = false;
@@ -410,16 +407,10 @@ async function generateHandler(req, key, zipPath) {
   const total = participants?.length || 0;
   let processedCount = 0;
 
-  // Create a temporary directory for this generation session
-  const tempDir = path.join(__dirname, `temp_${key}`);
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
-  }
+  // store zip path
+  zipStore[key] = zipPath;
 
-  // Store paths for cleanup
-  zipStore[key] = { zipPath, tempDir, completed: false };
-
-  // Initial progress
+  // initial progress
   sendProgress(key, { 
     stage: "started", 
     task: "Generating certificates",
@@ -429,8 +420,8 @@ async function generateHandler(req, key, zipPath) {
   });
 
   // -------------------------------
-  // Create incremental ZIP
-  const archive = archiver("zip", { zlib: { level: 5 } }); // Lower compression for speed
+  // Create ZIP stream
+  const archive = archiver("zip", { zlib: { level: 9 } });
   const output = fs.createWriteStream(zipPath);
 
   archive.on("warning", err => {
@@ -446,13 +437,13 @@ async function generateHandler(req, key, zipPath) {
   archive.pipe(output);
 
   // -------------------------------
-  // SSE HEARTBEAT
+  // SSE HEARTBEAT FIX (every 3 sec)
   let heartbeat = setInterval(() => {
     sendProgress(key, { type: "ping", ts: Date.now() });
   }, 3000);
 
   // -------------------------------
-  // Load resources
+  // Load PDF template
   let baseTemplate = null;
   try {
     if (templateUrl) {
@@ -478,6 +469,7 @@ async function generateHandler(req, key, zipPath) {
     console.error("Template load error:", err);
   }
 
+  // -------------------------------
   // Load font
   let fontBytes = null;
   try {
@@ -492,254 +484,138 @@ async function generateHandler(req, key, zipPath) {
   }
 
   // -------------------------------
-  // Array to store generated PDF paths for partial completion
-  const generatedPdfs = [];
+  // Process batches
+  const BATCH_SIZE = 3;
 
-  try {
-    // Process batches
-    const BATCH_SIZE = 2; // Smaller batch size for 512MB RAM
-    let shouldStop = false;
+  for (let start = 0; start < total; start += BATCH_SIZE) {
+    const batch = participants.slice(start, start + BATCH_SIZE);
 
-    for (let start = 0; start < total && !shouldStop; start += BATCH_SIZE) {
-      // Check if stop was requested
-      if (stopRequested) {
-        console.log(`⏸️ Stop requested for key: ${key}`);
-        shouldStop = true;
-        break;
-      }
+    for (let i = 0; i < batch.length; i++) {
+      if (stopRequested) break;
 
-      const batch = participants.slice(start, start + BATCH_SIZE);
-      const batchPromises = [];
+      const p = batch[i];
 
-      for (let i = 0; i < batch.length; i++) {
-        const p = batch[i];
-        const index = start + i;
+      try {
+        // Prepare PDF
+        let pdfDoc;
+        if (baseTemplate) {
+          pdfDoc = await PDFDocument.create();
+          const pg = await pdfDoc.copyPages(baseTemplate, [0]);
+          pdfDoc.addPage(pg[0]);
+        } else {
+          pdfDoc = await PDFDocument.create();
+          pdfDoc.addPage([600, 400]);
+        }
 
-        // Create promise for each PDF generation
-        const pdfPromise = (async () => {
-          try {
-            // Prepare PDF
-            let pdfDoc;
-            if (baseTemplate) {
-              pdfDoc = await PDFDocument.create();
-              const pg = await pdfDoc.copyPages(baseTemplate, [0]);
-              pdfDoc.addPage(pg[0]);
-            } else {
-              pdfDoc = await PDFDocument.create();
-              pdfDoc.addPage([600, 400]);
-            }
+        // font
+        pdfDoc.registerFontkit(fontkit);
+        const customFont = await pdfDoc.embedFont(fontBytes);
 
-            // Embed font
-            pdfDoc.registerFontkit(fontkit);
-            const customFont = await pdfDoc.embedFont(fontBytes);
-            const page = pdfDoc.getPage(0);
-            const pageHeight = page.getSize().height;
+        const page = pdfDoc.getPage(0);
+        const pageHeight = page.getSize().height;
 
-            // Draw fields
-            for (const f of fields) {
-              const value = (p[f.field] || "").toString().trim();
-              if (!value) continue;
+        // draw fields
+        for (const f of fields) {
+          const value = (p[f.field] || "").toString().trim();
+          if (!value) continue;
 
-              const hex = (f.color || "#000000").replace("#", "");
-              const r = parseInt(hex.slice(0, 2), 16) / 255;
-              const g = parseInt(hex.slice(2, 4), 16) / 255;
-              const b = parseInt(hex.slice(4, 6), 16) / 255;
+          const hex = f.color.replace("#", "");
+          const r = parseInt(hex.slice(0, 2), 16) / 255;
+          const g = parseInt(hex.slice(2, 4), 16) / 255;
+          const b = parseInt(hex.slice(4, 6), 16) / 255;
 
-              page.drawText(value, {
-                x: f.x,
-                y: pageHeight - f.y - f.size,
-                size: f.size,
-                font: customFont,
-                color: rgb(r, g, b),
-              });
-            }
+          page.drawText(value, {
+            x: f.x,
+            y: pageHeight - f.y - f.size,
+            size: f.size,
+            font: customFont,
+            color: rgb(r, g, b),
+          });
+        }
 
-            const pdfBytes = await pdfDoc.save();
-            const pdfBuffer = Buffer.from(pdfBytes);
+        const pdfBytes = await pdfDoc.save();
 
-            // Save to temp file first
-            const safeName = (p.name || `certificate_${index + 1}`)
-              .replace(/[^a-z0-9_.-]/gi, "_")
-              .toLowerCase();
-            
-            const tempPdfPath = path.join(tempDir, `${safeName}.pdf`);
-            fs.writeFileSync(tempPdfPath, pdfBuffer);
-            
-            // Add to ZIP archive
-            archive.append(pdfBuffer, { name: `${safeName}.pdf` });
-            generatedPdfs.push(tempPdfPath);
+        const safeName = (p.name || `user_${start + i + 1}`)
+          .replace(/[^a-z0-9_.-]/gi, "_")
+          .toLowerCase();
 
-            return { success: true, index, name: p.name };
+        archive.append(Buffer.from(pdfBytes), { name: `${safeName}.pdf` });
 
-          } catch (err) {
-            console.error(`Error processing ${index}:`, err);
-            return { success: false, index, error: err.message };
-          }
-        })();
+        processedCount++;
+        const percent = Math.round((processedCount / total) * 100);
 
-        batchPromises.push(pdfPromise);
-      }
-
-      // Wait for batch completion
-      const results = await Promise.all(batchPromises);
-      
-      // Update progress
-      processedCount += batch.length;
-      const percent = Math.round((processedCount / total) * 100);
-      
-      // RAM monitoring
-      const ram = process.memoryUsage();
-      const ramUsedMB = ram.rss / 1024 / 1024;
-      
-      // Check if we're approaching memory limit (512MB)
-      if (ramUsedMB > 450) {
-        console.warn(`⚠️ High memory usage: ${ramUsedMB.toFixed(1)}MB. Stopping to prevent crash.`);
-        shouldStop = true;
+        // RAM LOG
+        const ram = process.memoryUsage();
         sendProgress(key, {
-          stage: "warning",
-          task: "Memory limit approaching. Stopping generation.",
+          stage: "processing",
+          task: "Generating certificates",
           current: processedCount,
           total,
           percent,
-          ramUsedMB: ramUsedMB.toFixed(1),
+          name: p.name,
+          ramUsedMB: (ram.rss / 1024 / 1024).toFixed(1),
           ramLimitMB: 512
         });
-        break;
-      }
-
-      // Send progress update
-      sendProgress(key, {
-        stage: shouldStop ? "partial" : "processing",
-        task: shouldStop ? "Stopping early (memory)" : "Generating certificates",
-        current: processedCount,
-        total,
-        percent,
-        ramUsedMB: ramUsedMB.toFixed(1),
-        ramLimitMB: 512
-      });
-
-      // Small delay between batches
-      await new Promise(r => setTimeout(r, 50));
-      
-      // Force garbage collection if available
-      if (global.gc) global.gc();
-    }
-
-    // -------------------------------
-    // Finalize based on completion status
-    if (shouldStop || stopRequested) {
-      // Partial completion - still finalize with what we have
-      console.log(`🔄 Finalizing partial ZIP for key: ${key} (${processedCount}/${total} PDFs)`);
-      
-      try {
-        await archive.finalize();
-        
-        await new Promise((resolve, reject) => {
-          output.on("close", resolve);
-          output.on("error", reject);
-        });
-
-        // Mark as partially completed
-        zipStore[key].completed = "partial";
-        
-        sendProgress(key, {
-          stage: "partial",
-          task: "Partial generation completed",
-          current: processedCount,
-          total,
-          percent: Math.round((processedCount / total) * 100),
-          message: `Generated ${processedCount} out of ${total} certificates`,
-          downloadUrl: `/download?key=${key}`,
-          partial: true,
-          generatedCount: processedCount,
-          totalCount: total
-        });
 
       } catch (err) {
-        console.error("Partial finalize error:", err);
-        sendProgress(key, { 
-          stage: "error", 
-          task: "Partial ZIP creation failed",
-          message: `Generated ${processedCount} PDFs but failed to create ZIP`
-        });
-      }
-
-    } else {
-      // Full completion
-      console.log(`✅ Finalizing complete ZIP for key: ${key}`);
-      
-      try {
-        await archive.finalize();
-        
-        await new Promise((resolve, reject) => {
-          output.on("close", resolve);
-          output.on("error", reject);
-        });
-
-        // Mark as completed
-        zipStore[key].completed = "full";
-        
-        sendProgress(key, {
-          stage: "completed",
-          task: "All certificates generated",
-          current: total,
-          total,
-          percent: 100,
-          downloadUrl: `/download?key=${key}`,
-          partial: false,
-          generatedCount: total
-        });
-
-      } catch (err) {
-        console.error("Finalize error:", err);
-        sendProgress(key, { stage: "error", task: "ZIP finalize failed" });
+        console.error(`Error processing ${start + i}:`, err);
       }
     }
+
+    // batch RAM log
+    const ram = process.memoryUsage();
+    console.log(`🧠 RAM after batch: ${(ram.rss/1024/1024).toFixed(1)} MB used of 512 MB`);
+
+    await new Promise(r => setTimeout(r, 20));
+    if (global.gc) global.gc();
+  }
+
+  // -------------------------------
+  // Finalize ZIP
+  try {
+    await archive.finalize();
+
+    await new Promise((resolve, reject) => {
+      output.on("close", resolve);
+      output.on("error", reject);
+    });
+
+    const ram = process.memoryUsage();
+
+    // 🔥🔥🔥 ONLY CHANGE ADDED — SEND HOW MANY GENERATED 🔥🔥🔥
+    sendProgress(key, {
+      stage: stopRequested ? "cancelled" : "completed",
+      task: stopRequested ? "Cancelled" : "All certificates generated",
+      current: processedCount,
+      total,
+      percent: stopRequested ? Math.round((processedCount / total) * 100) : 100,
+      generatedCount: processedCount,   // ⭐ REQUIRED FIX ⭐
+      downloadUrl: stopRequested ? null : `/download?key=${key}`,
+      finalRamMB: (ram.rss / 1024 / 1024).toFixed(1),
+      ramLimitMB: 512
+    });
 
   } catch (err) {
-    console.error("Generation handler error:", err);
-    sendProgress(key, { 
-      stage: "error", 
-      task: "Generation failed",
-      message: err.message || "Unknown error"
-    });
-  } finally {
-    // Cleanup
-    clearInterval(heartbeat);
-    
-    // Clean up temp directory after 5 minutes
-    setTimeout(() => {
-      if (fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        console.log(`🧹 Cleaned temp directory for key: ${key}`);
-      }
-    }, 5 * 60 * 1000);
-    
-    // Clean up ZIP file after 30 minutes if not downloaded
-    setTimeout(() => {
-      if (zipStore[key] && fs.existsSync(zipPath)) {
-        fs.unlink(zipPath, () => {
-          console.log(`🧹 Cleaned up ZIP for key: ${key} (timeout)`);
-          delete zipStore[key];
-        });
-      }
-    }, 30 * 60 * 1000);
+    console.error("Finalize error:", err);
+    sendProgress(key, { stage: "error", task: "ZIP finalize failed", generatedCount: processedCount });
+  }
 
-    // Release memory
-    baseTemplate = null;
-    fontBytes = null;
-    if (global.gc) global.gc();
+  // cleanup
+  clearInterval(heartbeat);
+  baseTemplate = null;
+  fontBytes = null;
+  if (global.gc) global.gc();
 
-    isGenerating = false;
+  isGenerating = false;
 
-    // Process next in queue
-    if (queue.length > 0 && !stopRequested) {
-      const next = queue.shift();
-      const nextZip = path.join(__dirname, `temp_${next.key}.zip`);
-      setTimeout(() => generateHandler(next.req, next.key, nextZip), 2000);
-    }
+  // queue next job
+  if (queue.length > 0 && !stopRequested) {
+    const next = queue.shift();
+    const nextZip = path.join(__dirname, `temp_${next.key}.zip`);
+    setTimeout(() => generateHandler(next.req, next.key, nextZip), 1000);
   }
 }
+
 
 // Also update the stop endpoint to allow partial completion:
 app.post("/stop-generate", (req, res) => {
@@ -784,6 +660,23 @@ app.post("/cleanup", (req, res) => {
   }
   res.json({ success: true });
 });
+
+
+app.get("/status", (req, res) => {
+  const key = req.query.key;
+
+  if (!progressStore[key]) {
+    return res.json({ completed: false });
+  }
+
+  const record = progressStore[key];
+  
+  res.json({
+    completed: record.stage === "completed",
+    downloadUrl: record.downloadUrl || null
+  });
+});
+
 
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
