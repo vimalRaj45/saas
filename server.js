@@ -485,7 +485,7 @@ async function generateHandler(req, key, zipPath) {
 
   // -------------------------------
   // Process batches
-  const BATCH_SIZE = 3;
+  const BATCH_SIZE = 10;
 
   for (let start = 0; start < total; start += BATCH_SIZE) {
     const batch = participants.slice(start, start + BATCH_SIZE);
@@ -582,22 +582,20 @@ async function generateHandler(req, key, zipPath) {
 
     const ram = process.memoryUsage();
 
-    // 🔥🔥🔥 ONLY CHANGE ADDED — SEND HOW MANY GENERATED 🔥🔥🔥
     sendProgress(key, {
       stage: stopRequested ? "cancelled" : "completed",
       task: stopRequested ? "Cancelled" : "All certificates generated",
       current: processedCount,
       total,
-      percent: stopRequested ? Math.round((processedCount / total) * 100) : 100,
-      generatedCount: processedCount,   // ⭐ REQUIRED FIX ⭐
+      percent: stopRequested ? Math.round(processedCount / total * 100) : 100,
       downloadUrl: stopRequested ? null : `/download?key=${key}`,
-      finalRamMB: (ram.rss / 1024 / 1024).toFixed(1),
+      finalRamMB: (ram.rss/1024/1024).toFixed(1),
       ramLimitMB: 512
     });
 
   } catch (err) {
     console.error("Finalize error:", err);
-    sendProgress(key, { stage: "error", task: "ZIP finalize failed", generatedCount: processedCount });
+    sendProgress(key, { stage: "error", task: "ZIP finalize failed" });
   }
 
   // cleanup
@@ -615,7 +613,6 @@ async function generateHandler(req, key, zipPath) {
     setTimeout(() => generateHandler(next.req, next.key, nextZip), 1000);
   }
 }
-
 
 // Also update the stop endpoint to allow partial completion:
 app.post("/stop-generate", (req, res) => {
