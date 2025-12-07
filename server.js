@@ -665,7 +665,8 @@ app.post("/cleanup", (req, res) => {
   res.json({ success: true });
 });
 
-
+// 🆕 ADD THIS
+const progressStore = {};
 app.get("/status", (req, res) => {
   const key = req.query.key;
 
@@ -685,4 +686,5 @@ app.get("/status", (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
+
 
