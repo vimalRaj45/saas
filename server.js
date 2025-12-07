@@ -13,9 +13,7 @@ import { fileURLToPath } from 'url';
 import fontkit from "@pdf-lib/fontkit";
 import cors from "cors";
 
-
 dotenv.config();
-
 
 // ====== CONFIGURE CLOUDINARY ======
 cloudinary.config({
@@ -24,7 +22,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
   secure: true
 });
-
 
 // Helper: Fetch image from URL as Buffer
 function getBufferFromUrl(url) {
@@ -54,14 +51,12 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = 5000;
 
-
 app.use(cors({
   origin: "*",
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
-
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -70,14 +65,10 @@ const upload = multer({
   storage: multer.memoryStorage() // only for handling uploads before sending to Cloudinary
 });
 
-
 // Serve only the homepage
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
-
-
-
 
 // --- Upload CSV (Parse Only — No Cloudinary Upload) ---
 app.post('/upload-csv', upload.single('csv'), async (req, res) => {
@@ -249,7 +240,6 @@ app.post('/preview-pdf', async (req, res) => {
 
     // -------------------------------
     console.log("➡ Step 7: Saving PDF...");
-    // ✅ Fixed
     let pdfBytes = await pdfDoc.save();
     console.log("   ✔ PDF saved successfully");
 
@@ -282,14 +272,12 @@ app.get("/progress", (req, res) => {
   res.flushHeaders();
 
   // send an initial comment to establish the connection immediately (helps some proxies)
-  // comments start with ':' and are ignored by SSE parsers, but keep connection alive
   res.write(': connected\n\n');
 
   const clientId = Date.now() + Math.random();
   const newClient = { id: clientId, key, res };
   clients.push(newClient);
 
-  // debug log
   console.log(`➕ SSE client ${clientId} connected for key=${key} (total clients: ${clients.length})`);
 
   req.on("close", () => {
@@ -298,10 +286,9 @@ app.get("/progress", (req, res) => {
   });
 });
 
-
 function sendProgress(key, data) {
   clients.forEach(client => {
-    if (client.key === key) {
+    if (client.key === key || key === null) {
       try {
         client.res.write(`data: ${JSON.stringify(data)}\n\n`);
       } catch {
@@ -321,25 +308,6 @@ let stopRequested = false;
 // Temporary storage: key → ZIP path
 let zipStore = {};
 
-// ----------------------
-// Stop Generation
-// ----------------------
-app.post("/stop-generate", (req, res) => {
-  stopRequested = true;
-  queue.forEach(q => {
-    q.res?.status(409).json({
-      error: "Generation cancelled by user",
-      message: "Your request was cancelled because the current generation was stopped"
-    });
-  });
-  queue = [];
-  sendProgress(null, { stage: "stopped", task: "⛔ Stopped by user" });
-  return res.json({ success: true });
-});
-
-// ----------------------
-// Generate endpoint
-// ----------------------
 // ----------------------
 // Generate endpoint
 // ----------------------
@@ -648,9 +616,6 @@ app.post("/stop-generate", (req, res) => {
   });
 });
 
-
-
-
 // Add cleanup endpoint
 app.post("/cleanup", (req, res) => {
   const { key } = req.body;
@@ -682,9 +647,6 @@ app.get("/status", (req, res) => {
   });
 });
 
-
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
-
-
