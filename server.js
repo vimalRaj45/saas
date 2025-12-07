@@ -56,7 +56,11 @@ const port = 5000;
 
 
 app.use(cors({
-  origin: "*"}));
+  origin: "*",
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+}));
 
 
 app.use(express.json({ limit: '50mb' }));
@@ -681,3 +685,4 @@ app.get("/status", (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Precise Certificate Generator running at http://localhost:${port}`);
 });
+
